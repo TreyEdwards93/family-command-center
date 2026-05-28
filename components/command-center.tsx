@@ -1,5 +1,6 @@
 "use client";
 
+import { resolveNameFromEmail } from "@/lib/resolve-name";
 import { useMemo, useRef, useState } from "react";
 
 type Tab = "chat" | "budget";
@@ -19,38 +20,31 @@ function formatTime(date: Date) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function getExampleMessages(userEmail: string): ChatMessage[] {
-  const now = Date.now();
+function getInitialMessages(userEmail: string): ChatMessage[] {
+  const name = resolveNameFromEmail(userEmail);
   return [
     {
-      id: "1",
-      sender: userEmail,
-      isClaude: false,
-      text: "What's our grocery budget looking like this week?",
-      timestamp: new Date(now - 1000 * 60 * 52),
-    },
-    {
-      id: "2",
+      id: "welcome",
       sender: "Claude",
       isClaude: true,
-      text: "You've spent $412 of $600 on groceries — about 69% of the category budget with 4 days left in May.",
-      timestamp: new Date(now - 1000 * 60 * 48),
-    },
-    {
-      id: "3",
-      sender: userEmail,
-      isClaude: false,
-      text: "Can you remind everyone about soccer on Saturday?",
-      timestamp: new Date(now - 1000 * 60 * 44),
-    },
-    {
-      id: "4",
-      sender: "Claude",
-      isClaude: true,
-      text: "Added to the family display queue. I'll show a reminder Friday evening and Saturday morning.",
-      timestamp: new Date(now - 1000 * 60 * 41),
+      text: `Hey ${name}, what do you need?`,
+      timestamp: new Date(),
     },
   ];
+}
+
+type ApiMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+function toApiMessages(messages: ChatMessage[]): ApiMessage[] {
+  return messages
+    .filter((m) => m.text.trim().length > 0)
+    .map((m) => ({
+      role: m.isClaude ? "assistant" : "user",
+      content: m.text,
+    }));
 }
 
 function progressBarColor(percent: number) {
@@ -136,12 +130,20 @@ type CommandCenterProps = {
 export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) {
   const [tab, setTab] = useState<Tab>("chat");
   const initialMessages = useMemo(
-    () => getExampleMessages(userEmail),
+    () => getInitialMessages(userEmail),
     [userEmail],
   );
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [draft, setDraft] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    });
+  };
 
   const daysLeft = useMemo(() => {
     const now = new Date();
@@ -149,24 +151,115 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     return Math.max(0, lastDay - now.getDate());
   }, []);
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || isLoading) return;
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        sender: userEmail,
-        isClaude: false,
-        text,
-        timestamp: new Date(),
-      },
-    ]);
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      sender: userEmail,
+      isClaude: false,
+      text,
+      timestamp: new Date(),
+    };
+
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages);
     setDraft("");
-    requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    });
+    setIsLoading(true);
+    setIsTyping(true);
+    scrollToBottom();
+
+    const assistantId = crypto.randomUUID();
+    let assistantStarted = false;
+    let assistantText = "";
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: toApiMessages(nextMessages),
+          userEmail,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Chat request failed");
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        throw new Error("No response stream");
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+
+          const payload = JSON.parse(line.slice(6)) as {
+            type: string;
+            text?: string;
+            message?: string;
+          };
+
+          if (payload.type === "text" && payload.text) {
+            if (!assistantStarted) {
+              assistantStarted = true;
+              setIsTyping(false);
+              assistantText = payload.text;
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: assistantId,
+                  sender: "Claude",
+                  isClaude: true,
+                  text: assistantText,
+                  timestamp: new Date(),
+                },
+              ]);
+            } else {
+              assistantText += payload.text;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, text: assistantText } : m,
+                ),
+              );
+            }
+            scrollToBottom();
+          } else if (payload.type === "error") {
+            throw new Error(payload.message ?? "Stream error");
+          }
+        }
+      }
+    } catch {
+      if (!assistantStarted) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantId,
+            sender: "Claude",
+            isClaude: true,
+            text: "Sorry, something went wrong. Try again.",
+            timestamp: new Date(),
+          },
+        ]);
+      }
+    } finally {
+      setIsLoading(false);
+      setIsTyping(false);
+      scrollToBottom();
+    }
   };
 
   return (
@@ -222,7 +315,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                           : "rounded-br-sm bg-sky-100"
                       }`}
                     >
-                      <p className="text-[15px] leading-snug text-zinc-900">
+                      <p className="whitespace-pre-wrap text-[15px] leading-snug text-zinc-900">
                         {message.text}
                       </p>
                     </div>
@@ -231,6 +324,17 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                     </p>
                   </li>
                 ))}
+                {isTyping && (
+                  <li className="flex flex-col items-start">
+                    <div className="rounded-2xl rounded-bl-sm bg-zinc-200/80 px-4 py-3">
+                      <span className="flex items-center gap-1" aria-label="Claude is typing">
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-500 [animation-delay:0ms]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-500 [animation-delay:150ms]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-500 [animation-delay:300ms]" />
+                      </span>
+                    </div>
+                  </li>
+                )}
               </ul>
               <div ref={bottomRef} className="h-1" aria-hidden />
             </div>
@@ -238,7 +342,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                sendMessage();
+                void sendMessage();
               }}
               className={`shrink-0 ${BORDER} border-x-0 border-b-0 bg-[#f8f7f4] px-3 py-3`}
             >
@@ -254,15 +358,16 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      sendMessage();
+                      void sendMessage();
                     }
                   }}
                   placeholder="Message the family…"
-                  className={`h-11 min-w-0 flex-1 rounded-full ${BORDER} bg-white px-4 text-[15px] text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-300`}
+                  disabled={isLoading}
+                  className={`h-11 min-w-0 flex-1 rounded-full ${BORDER} bg-white px-4 text-[15px] text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-300 disabled:opacity-50`}
                 />
                 <button
                   type="submit"
-                  disabled={!draft.trim()}
+                  disabled={!draft.trim() || isLoading}
                   aria-label="Send message"
                   className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white disabled:opacity-35"
                 >
