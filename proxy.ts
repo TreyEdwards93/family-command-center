@@ -1,24 +1,48 @@
+import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-export function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+export async function proxy(request: NextRequest) {
+  let supabaseResponse = NextResponse.next({ request });
 
-  if (pathname === "/login" || pathname.startsWith("/auth/")) {
-    return NextResponse.next();
-  }
-
-  const cookies = request.cookies.getAll();
-  const hasAuth = cookies.some(
-    (c) => c.name.startsWith("sb-") && c.name.endsWith("-auth-token"),
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) =>
+            request.cookies.set(name, value)
+          );
+          supabaseResponse = NextResponse.next({ request });
+          cookiesToSet.forEach(({ name, value, options }) =>
+            supabaseResponse.cookies.set(name, value, options)
+          );
+        },
+      },
+    }
   );
 
-  if (!hasAuth) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { pathname } = request.nextUrl;
+  const isLogin = pathname === "/login";
+  const isAuthCallback = pathname.startsWith("/auth/");
+
+  if (!user && !isLogin && !isAuthCallback) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  if (user && isLogin) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/";
+    return NextResponse.redirect(url);
+  }
+
+  return supabaseResponse;
 }
 
 export const config = {
