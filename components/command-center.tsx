@@ -1,7 +1,8 @@
 "use client";
 
 import { resolveNameFromEmail } from "@/lib/resolve-name";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePlaidLink } from "react-plaid-link";
 
 type Tab = "chat" | "budget";
 
@@ -53,16 +54,65 @@ function progressBarColor(percent: number) {
   return "bg-emerald-500";
 }
 
-const BUDGET_CATEGORIES = [
-  { name: "Groceries", spent: 412, budget: 600 },
-  { name: "Dining", spent: 278, budget: 300 },
-  { name: "Transportation", spent: 195, budget: 200 },
-  { name: "Shopping", spent: 468, budget: 450 },
-  { name: "Subscriptions", spent: 89, budget: 100 },
-] as const;
+const MONTH_BUDGET = 6000;
+const CATEGORY_TARGET = 500;
 
-const MONTH_SPENT = 3240;
-const MONTH_BUDGET = 5000;
+type PlaidTransaction = {
+  amount: number;
+  date: string;
+  category: string[] | null;
+};
+
+type CategorySpend = {
+  name: string;
+  spent: number;
+  budget: number;
+};
+
+function getBudgetMetrics(transactions: PlaidTransaction[]) {
+  const now = new Date();
+  const month = now.getMonth();
+  const year = now.getFullYear();
+
+  const monthTx = transactions.filter((t) => {
+    const d = new Date(`${t.date}T12:00:00`);
+    return d.getMonth() === month && d.getFullYear() === year;
+  });
+
+  const monthSpent = monthTx.reduce(
+    (sum, t) => sum + (t.amount > 0 ? t.amount : 0),
+    0,
+  );
+
+  const byCategory = new Map<string, number>();
+  for (const t of monthTx) {
+    if (t.amount <= 0) continue;
+    const cat = t.category?.[0] ?? "Other";
+    byCategory.set(cat, (byCategory.get(cat) ?? 0) + t.amount);
+  }
+
+  const categories: CategorySpend[] = [...byCategory.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name, spent]) => ({
+      name,
+      spent: Math.round(spent),
+      budget: CATEGORY_TARGET,
+    }));
+
+  return { monthSpent: Math.round(monthSpent), categories };
+}
+
+function getRecommendation(categories: CategorySpend[]): string {
+  const over = categories.find((c) => c.spent > c.budget);
+  if (over) {
+    return `${over.name} is over your $${over.budget} target this month. Worth a quick look before the month ends.`;
+  }
+  if (categories.length === 0) {
+    return "No spending recorded yet this month. Check back after a few transactions sync.";
+  }
+  return "Spending looks on track across your top categories. Keep it up.";
+}
 
 function MessageIcon({ className }: { className?: string }) {
   return (
@@ -137,7 +187,102 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
   const [draft, setDraft] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [plaidLoading, setPlaidLoading] = useState(true);
+  const [plaidConnected, setPlaidConnected] = useState(false);
+  const [plaidConnecting, setPlaidConnecting] = useState(false);
+  const [transactions, setTransactions] = useState<PlaidTransaction[]>([]);
+  const [linkToken, setLinkToken] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const loadTransactions = useCallback(async () => {
+    setPlaidLoading(true);
+    try {
+      const res = await fetch("/api/plaid/transactions");
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        connected: boolean;
+        transactions?: PlaidTransaction[];
+      };
+      if (data.connected && data.transactions) {
+        setPlaidConnected(true);
+        setTransactions(data.transactions);
+      } else {
+        setPlaidConnected(false);
+        setTransactions([]);
+      }
+    } catch {
+      setPlaidConnected(false);
+      setTransactions([]);
+    } finally {
+      setPlaidLoading(false);
+    }
+  }, []);
+
+  const { open, ready } = usePlaidLink({
+    token: linkToken,
+    onSuccess: async (public_token, metadata) => {
+      try {
+        const res = await fetch("/api/plaid/exchange-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            public_token,
+            institution_name: metadata.institution?.name,
+          }),
+        });
+        if (res.ok) {
+          await loadTransactions();
+        }
+      } finally {
+        setPlaidConnecting(false);
+        setLinkToken(null);
+      }
+    },
+    onExit: () => {
+      setPlaidConnecting(false);
+      setLinkToken(null);
+    },
+  });
+
+  useEffect(() => {
+    void loadTransactions();
+  }, [loadTransactions]);
+
+  useEffect(() => {
+    if (linkToken && ready) {
+      open();
+    }
+  }, [linkToken, ready, open]);
+
+  const connectChase = async () => {
+    setPlaidConnecting(true);
+    try {
+      const res = await fetch("/api/plaid/create-link-token", { method: "POST" });
+      if (!res.ok) {
+        setPlaidConnecting(false);
+        return;
+      }
+      const { link_token } = (await res.json()) as { link_token: string };
+      setLinkToken(link_token);
+    } catch {
+      setPlaidConnecting(false);
+    }
+  };
+
+  const monthLabel = useMemo(
+    () => new Date().toLocaleDateString("en-US", { month: "long" }),
+    [],
+  );
+
+  const budgetMetrics = useMemo(
+    () => getBudgetMetrics(transactions),
+    [transactions],
+  );
+
+  const recommendation = useMemo(
+    () => getRecommendation(budgetMetrics.categories),
+    [budgetMetrics.categories],
+  );
 
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
@@ -381,76 +526,108 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             <header
               className={`${BORDER} border-x-0 border-t-0 bg-[#f8f7f4] px-4 pb-4 pt-[max(0.75rem,env(safe-area-inset-top))]`}
             >
-              <h1 className="text-lg font-semibold tracking-tight">May budget</h1>
+              <h1 className="text-lg font-semibold tracking-tight">
+                {monthLabel} budget
+              </h1>
               <p className="mt-0.5 text-sm text-zinc-500">
                 {daysLeft} {daysLeft === 1 ? "day" : "days"} left
               </p>
             </header>
 
             <div className="space-y-3 px-4 pb-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div className={`rounded-xl ${BORDER} bg-white p-4`}>
-                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                    Spent
-                  </p>
-                  <p className="mt-1 text-2xl font-semibold tabular-nums">
-                    ${MONTH_SPENT.toLocaleString()}
-                  </p>
+              {plaidLoading ? (
+                <div className={`rounded-xl ${BORDER} bg-white p-8 text-center text-sm text-zinc-500`}>
+                  Loading budget…
                 </div>
-                <div className={`rounded-xl ${BORDER} bg-white p-4`}>
-                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                    Remaining
+              ) : !plaidConnected ? (
+                <div className={`rounded-xl ${BORDER} bg-white p-8 text-center`}>
+                  <p className="text-sm text-zinc-600">
+                    Connect your Chase account to see real spending data.
                   </p>
-                  <p className="mt-1 text-2xl font-semibold tabular-nums">
-                    ${(MONTH_BUDGET - MONTH_SPENT).toLocaleString()}
-                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void connectChase()}
+                    disabled={plaidConnecting}
+                    className="mt-4 rounded-full bg-zinc-900 px-6 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                  >
+                    {plaidConnecting ? "Connecting…" : "Connect Chase"}
+                  </button>
                 </div>
-              </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className={`rounded-xl ${BORDER} bg-white p-4`}>
+                      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Spent
+                      </p>
+                      <p className="mt-1 text-2xl font-semibold tabular-nums">
+                        ${budgetMetrics.monthSpent.toLocaleString()}
+                      </p>
+                    </div>
+                    <div className={`rounded-xl ${BORDER} bg-white p-4`}>
+                      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Remaining
+                      </p>
+                      <p className="mt-1 text-2xl font-semibold tabular-nums">
+                        $
+                        {Math.max(
+                          0,
+                          MONTH_BUDGET - budgetMetrics.monthSpent,
+                        ).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
 
-              <div className={`rounded-xl ${BORDER} bg-white p-4`}>
-                <p className="mb-4 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                  By category
-                </p>
-                <ul className="space-y-4">
-                  {BUDGET_CATEGORIES.map((cat) => {
-                    const percent = Math.round((cat.spent / cat.budget) * 100);
-                    const width = Math.min(percent, 100);
-                    return (
-                      <li key={cat.name}>
-                        <div className="mb-1.5 flex items-baseline justify-between gap-2 text-sm">
-                          <span className="font-medium text-zinc-800">
-                            {cat.name}
-                          </span>
-                          <span className="shrink-0 text-xs tabular-nums text-zinc-500">
-                            ${cat.spent} / ${cat.budget} · {percent}%
-                          </span>
-                        </div>
-                        <div
-                          className={`h-1.5 overflow-hidden rounded-full bg-zinc-100 ${BORDER}`}
-                        >
-                          <div
-                            className={`h-full rounded-full ${progressBarColor(percent)}`}
-                            style={{ width: `${width}%` }}
-                          />
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
+                  <div className={`rounded-xl ${BORDER} bg-white p-4`}>
+                    <p className="mb-4 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      By category
+                    </p>
+                    {budgetMetrics.categories.length === 0 ? (
+                      <p className="text-sm text-zinc-500">
+                        No transactions this month yet.
+                      </p>
+                    ) : (
+                      <ul className="space-y-4">
+                        {budgetMetrics.categories.map((cat) => {
+                          const percent = Math.round(
+                            (cat.spent / cat.budget) * 100,
+                          );
+                          const width = Math.min(percent, 100);
+                          return (
+                            <li key={cat.name}>
+                              <div className="mb-1.5 flex items-baseline justify-between gap-2 text-sm">
+                                <span className="font-medium text-zinc-800">
+                                  {cat.name}
+                                </span>
+                                <span className="shrink-0 text-xs tabular-nums text-zinc-500">
+                                  ${cat.spent} / ${cat.budget} · {percent}%
+                                </span>
+                              </div>
+                              <div
+                                className={`h-1.5 overflow-hidden rounded-full bg-zinc-100 ${BORDER}`}
+                              >
+                                <div
+                                  className={`h-full rounded-full ${progressBarColor(percent)}`}
+                                  style={{ width: `${width}%` }}
+                                />
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
 
-              <div
-                className={`rounded-xl ${BORDER} bg-zinc-100/80 p-4 text-sm leading-relaxed text-zinc-600`}
-              >
-                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                  Recommendation
-                </p>
-                <p className="mt-2">
-                  Shopping is over budget this month. Consider pausing
-                  non-essential purchases until June, or moving $50 from Dining
-                  to cover the gap.
-                </p>
-              </div>
+                  <div
+                    className={`rounded-xl ${BORDER} bg-zinc-100/80 p-4 text-sm leading-relaxed text-zinc-600`}
+                  >
+                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      Recommendation
+                    </p>
+                    <p className="mt-2">{recommendation}</p>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
