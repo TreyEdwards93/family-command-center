@@ -1,6 +1,5 @@
 "use client";
 
-import { createClient } from "@/lib/supabase/client";
 import { resolveNameFromEmail } from "@/lib/resolve-name";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -89,22 +88,39 @@ function buildCategories(
   const month = now.getMonth();
   const year = now.getFullYear();
 
-  const map = new Map<string, number>();
+  const spendMap = new Map<string, number>();
   for (const t of transactions) {
     if (t.amount <= 0) continue;
     const d = new Date(`${t.date}T12:00:00`);
     if (d.getMonth() !== month || d.getFullYear() !== year) continue;
     const cat = t.category?.[0] ?? "Other";
-    map.set(cat, (map.get(cat) ?? 0) + t.amount);
+    spendMap.set(cat, (spendMap.get(cat) ?? 0) + t.amount);
   }
 
-  return [...map.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, spent]) => ({
-      name,
-      spent,
-      target: targets[name] ?? targets[name.toLowerCase()] ?? null,
-    }));
+  // Resolve a target for a category name (case-insensitive fallback)
+  const resolveTarget = (name: string): number | null =>
+    targets[name] ?? targets[name.toLowerCase()] ?? null;
+
+  // Build rows from actual spend
+  const rows: CategoryRow[] = [...spendMap.entries()].map(([name, spent]) => ({
+    name,
+    spent,
+    target: resolveTarget(name),
+  }));
+
+  // Add zero-spend rows for every target category not already in the list
+  const spentNames = new Set(rows.map((r) => r.name.toLowerCase()));
+  for (const [targetName, targetAmount] of Object.entries(targets)) {
+    if (!spentNames.has(targetName.toLowerCase())) {
+      rows.push({ name: targetName, spent: 0, target: targetAmount });
+    }
+  }
+
+  // Sort: categories with spend first (descending), then zero-spend rows by target descending
+  return rows.sort((a, b) => {
+    if (a.spent !== b.spent) return b.spent - a.spent;
+    return (b.target ?? 0) - (a.target ?? 0);
+  });
 }
 
 function parseTargets(memories: Record<string, string>): Record<string, number> {
@@ -217,10 +233,9 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
   const loadBudgetData = useCallback(async () => {
     setBudgetLoading(true);
     try {
-      const supabase = createClient();
       const [txRes, memoriesRes] = await Promise.all([
         fetch("/api/plaid/transactions"),
-        supabase.from("memories").select("key, value"),
+        fetch("/api/memories"),
       ]);
 
       if (txRes.ok) {
@@ -236,11 +251,11 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
         }
       }
 
-      if (memoriesRes.data) {
-        const raw = Object.fromEntries(
-          memoriesRes.data.map((r) => [r.key, r.value]),
-        );
-        setTargets(parseTargets(raw));
+      if (memoriesRes.ok) {
+        const { memories } = (await memoriesRes.json()) as {
+          memories: Record<string, string>;
+        };
+        setTargets(parseTargets(memories));
       }
     } catch {
       setPlaidConnected(false);
