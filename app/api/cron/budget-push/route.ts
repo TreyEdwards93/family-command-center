@@ -86,8 +86,8 @@ export async function GET(request: Request) {
     .select("key, value")
     .eq("user_id", connection.user_id);
 
-  const memoriesMap = Object.fromEntries(
-    (memoriesRows ?? []).map((r) => [r.key, r.value]),
+  const memoriesMap: Record<string, string> = Object.fromEntries(
+    (memoriesRows ?? []).map((r) => [r.key as string, r.value as string]),
   );
   const targets = parseTargets(memoriesMap["budget_targets"]);
 
