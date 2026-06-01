@@ -1,7 +1,9 @@
 "use client";
 
+import { createClient } from "@/lib/supabase/client";
 import { resolveNameFromEmail } from "@/lib/resolve-name";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { usePlaidLink } from "react-plaid-link";
 
 type Tab = "chat" | "budget";
@@ -16,9 +18,14 @@ type ChatMessage = {
 
 const BORDER = "border-[0.5px] border-zinc-200";
 const BG = "bg-[#f8f7f4]";
+const MONTH_BUDGET = 6000;
 
 function formatTime(date: Date) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatDollars(n: number) {
+  return "$" + Math.round(n).toLocaleString();
 }
 
 function getInitialMessages(userEmail: string): ChatMessage[] {
@@ -48,70 +55,81 @@ function toApiMessages(messages: ChatMessage[]): ApiMessage[] {
     }));
 }
 
-function progressBarColor(percent: number) {
+function barColor(percent: number) {
   if (percent >= 100) return "bg-red-500";
-  if (percent >= 85) return "bg-amber-500";
+  if (percent >= 85) return "bg-amber-400";
   return "bg-emerald-500";
 }
 
-const MONTH_BUDGET = 6000;
-const CATEGORY_TARGET = 500;
+function barBg(percent: number) {
+  if (percent >= 100) return "bg-red-50";
+  if (percent >= 85) return "bg-amber-50";
+  return "bg-zinc-100";
+}
 
 type PlaidTransaction = {
   amount: number;
   date: string;
   category: string[] | null;
+  merchant_name?: string | null;
+  name: string;
 };
 
-type CategorySpend = {
+type CategoryRow = {
   name: string;
   spent: number;
-  budget: number;
+  target: number | null;
 };
 
-function getBudgetMetrics(transactions: PlaidTransaction[]) {
+function buildCategories(
+  transactions: PlaidTransaction[],
+  targets: Record<string, number>,
+): CategoryRow[] {
   const now = new Date();
   const month = now.getMonth();
   const year = now.getFullYear();
 
-  const monthTx = transactions.filter((t) => {
-    const d = new Date(`${t.date}T12:00:00`);
-    return d.getMonth() === month && d.getFullYear() === year;
-  });
-
-  const monthSpent = monthTx.reduce(
-    (sum, t) => sum + (t.amount > 0 ? t.amount : 0),
-    0,
-  );
-
-  const byCategory = new Map<string, number>();
-  for (const t of monthTx) {
+  const map = new Map<string, number>();
+  for (const t of transactions) {
     if (t.amount <= 0) continue;
+    const d = new Date(`${t.date}T12:00:00`);
+    if (d.getMonth() !== month || d.getFullYear() !== year) continue;
     const cat = t.category?.[0] ?? "Other";
-    byCategory.set(cat, (byCategory.get(cat) ?? 0) + t.amount);
+    map.set(cat, (map.get(cat) ?? 0) + t.amount);
   }
 
-  const categories: CategorySpend[] = [...byCategory.entries()]
+  return [...map.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
     .map(([name, spent]) => ({
       name,
-      spent: Math.round(spent),
-      budget: CATEGORY_TARGET,
+      spent,
+      target: targets[name] ?? targets[name.toLowerCase()] ?? null,
     }));
-
-  return { monthSpent: Math.round(monthSpent), categories };
 }
 
-function getRecommendation(categories: CategorySpend[]): string {
-  const over = categories.find((c) => c.spent > c.budget);
-  if (over) {
-    return `${over.name} is over your $${over.budget} target this month. Worth a quick look before the month ends.`;
+function parseTargets(memories: Record<string, string>): Record<string, number> {
+  const out: Record<string, number> = {};
+
+  // Check for a single budget_targets JSON blob Claude may have saved
+  if (memories["budget_targets"]) {
+    try {
+      const parsed = JSON.parse(memories["budget_targets"]) as Record<string, number>;
+      Object.assign(out, parsed);
+    } catch {
+      // not JSON, ignore
+    }
   }
-  if (categories.length === 0) {
-    return "No spending recorded yet this month. Check back after a few transactions sync.";
+
+  // Also pick up individual budget_target_* keys
+  for (const [k, v] of Object.entries(memories)) {
+    if (k.startsWith("budget_target_")) {
+      const cat = k.replace("budget_target_", "").replace(/_/g, " ");
+      const num = parseFloat(v);
+      if (!isNaN(num)) out[cat] = num;
+    }
   }
-  return "Spending looks on track across your top categories. Keep it up.";
+
+  return out;
 }
 
 function MessageIcon({ className }: { className?: string }) {
@@ -179,42 +197,55 @@ type CommandCenterProps = {
 
 export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) {
   const [tab, setTab] = useState<Tab>("chat");
-  const initialMessages = useMemo(
-    () => getInitialMessages(userEmail),
-    [userEmail],
-  );
+
+  // ── Chat state ──────────────────────────────────────────────────────────────
+  const initialMessages = useMemo(() => getInitialMessages(userEmail), [userEmail]);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [draft, setDraft] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [plaidLoading, setPlaidLoading] = useState(true);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // ── Budget state ─────────────────────────────────────────────────────────────
+  const [budgetLoading, setBudgetLoading] = useState(true);
   const [plaidConnected, setPlaidConnected] = useState(false);
   const [plaidConnecting, setPlaidConnecting] = useState(false);
   const [transactions, setTransactions] = useState<PlaidTransaction[]>([]);
+  const [targets, setTargets] = useState<Record<string, number>>({});
   const [linkToken, setLinkToken] = useState<string | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
 
-  const loadTransactions = useCallback(async () => {
-    setPlaidLoading(true);
+  const loadBudgetData = useCallback(async () => {
+    setBudgetLoading(true);
     try {
-      const res = await fetch("/api/plaid/transactions");
-      if (!res.ok) return;
-      const data = (await res.json()) as {
-        connected: boolean;
-        transactions?: PlaidTransaction[];
-      };
-      if (data.connected && data.transactions) {
-        setPlaidConnected(true);
-        setTransactions(data.transactions);
-      } else {
-        setPlaidConnected(false);
-        setTransactions([]);
+      const supabase = createClient();
+      const [txRes, memoriesRes] = await Promise.all([
+        fetch("/api/plaid/transactions"),
+        supabase.from("memories").select("key, value"),
+      ]);
+
+      if (txRes.ok) {
+        const txData = (await txRes.json()) as {
+          connected: boolean;
+          transactions?: PlaidTransaction[];
+        };
+        if (txData.connected && txData.transactions) {
+          setPlaidConnected(true);
+          setTransactions(txData.transactions);
+        } else {
+          setPlaidConnected(false);
+        }
+      }
+
+      if (memoriesRes.data) {
+        const raw = Object.fromEntries(
+          memoriesRes.data.map((r) => [r.key, r.value]),
+        );
+        setTargets(parseTargets(raw));
       }
     } catch {
       setPlaidConnected(false);
-      setTransactions([]);
     } finally {
-      setPlaidLoading(false);
+      setBudgetLoading(false);
     }
   }, []);
 
@@ -230,9 +261,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             institution_name: metadata.institution?.name,
           }),
         });
-        if (res.ok) {
-          await loadTransactions();
-        }
+        if (res.ok) await loadBudgetData();
       } finally {
         setPlaidConnecting(false);
         setLinkToken(null);
@@ -245,23 +274,18 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
   });
 
   useEffect(() => {
-    void loadTransactions();
-  }, [loadTransactions]);
+    void loadBudgetData();
+  }, [loadBudgetData]);
 
   useEffect(() => {
-    if (linkToken && ready) {
-      open();
-    }
+    if (linkToken && ready) open();
   }, [linkToken, ready, open]);
 
   const connectChase = async () => {
     setPlaidConnecting(true);
     try {
       const res = await fetch("/api/plaid/create-link-token", { method: "POST" });
-      if (!res.ok) {
-        setPlaidConnecting(false);
-        return;
-      }
+      if (!res.ok) { setPlaidConnecting(false); return; }
       const { link_token } = (await res.json()) as { link_token: string };
       setLinkToken(link_token);
     } catch {
@@ -269,32 +293,32 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     }
   };
 
-  const monthLabel = useMemo(
-    () => new Date().toLocaleDateString("en-US", { month: "long" }),
-    [],
-  );
+  // ── Derived budget metrics ────────────────────────────────────────────────
+  const { monthLabel, daysLeft, totalSpent, categories } = useMemo(() => {
+    const now = new Date();
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return {
+      monthLabel: now.toLocaleDateString("en-US", { month: "long" }),
+      daysLeft: Math.max(0, lastDay - now.getDate()),
+      totalSpent: transactions
+        .filter((t) => {
+          if (t.amount <= 0) return false;
+          const d = new Date(`${t.date}T12:00:00`);
+          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        })
+        .reduce((s, t) => s + t.amount, 0),
+      categories: buildCategories(transactions, targets),
+    };
+  }, [transactions, targets]);
 
-  const budgetMetrics = useMemo(
-    () => getBudgetMetrics(transactions),
-    [transactions],
-  );
+  const totalPercent = Math.round((totalSpent / MONTH_BUDGET) * 100);
 
-  const recommendation = useMemo(
-    () => getRecommendation(budgetMetrics.categories),
-    [budgetMetrics.categories],
-  );
-
+  // ── Chat helpers ──────────────────────────────────────────────────────────
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     });
   };
-
-  const daysLeft = useMemo(() => {
-    const now = new Date();
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    return Math.max(0, lastDay - now.getDate());
-  }, []);
 
   const sendMessage = async () => {
     const text = draft.trim();
@@ -323,20 +347,12 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: toApiMessages(nextMessages),
-          userEmail,
-        }),
+        body: JSON.stringify({ messages: toApiMessages(nextMessages), userEmail }),
       });
-
-      if (!res.ok) {
-        throw new Error("Chat request failed");
-      }
+      if (!res.ok) throw new Error("Chat request failed");
 
       const reader = res.body?.getReader();
-      if (!reader) {
-        throw new Error("No response stream");
-      }
+      if (!reader) throw new Error("No response stream");
 
       const decoder = new TextDecoder();
       let buffer = "";
@@ -344,20 +360,17 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-
           const payload = JSON.parse(line.slice(6)) as {
             type: string;
             text?: string;
             message?: string;
           };
-
           if (payload.type === "text" && payload.text) {
             if (!assistantStarted) {
               assistantStarted = true;
@@ -365,20 +378,12 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
               assistantText = payload.text;
               setMessages((prev) => [
                 ...prev,
-                {
-                  id: assistantId,
-                  sender: "Claude",
-                  isClaude: true,
-                  text: assistantText,
-                  timestamp: new Date(),
-                },
+                { id: assistantId, sender: "Claude", isClaude: true, text: assistantText, timestamp: new Date() },
               ]);
             } else {
               assistantText += payload.text;
               setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, text: assistantText } : m,
-                ),
+                prev.map((m) => m.id === assistantId ? { ...m, text: assistantText } : m),
               );
             }
             scrollToBottom();
@@ -391,13 +396,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
       if (!assistantStarted) {
         setMessages((prev) => [
           ...prev,
-          {
-            id: assistantId,
-            sender: "Claude",
-            isClaude: true,
-            text: "Sorry, something went wrong. Try again.",
-            timestamp: new Date(),
-          },
+          { id: assistantId, sender: "Claude", isClaude: true, text: "Sorry, something went wrong. Try again.", timestamp: new Date() },
         ]);
       }
     } finally {
@@ -407,9 +406,12 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     }
   };
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className={`flex h-dvh flex-col ${BG} text-zinc-900`}>
       <div className="flex min-h-0 flex-1 flex-col">
+
+        {/* ── Chat tab ─────────────────────────────────────────────────────── */}
         {tab === "chat" ? (
           <>
             <header
@@ -417,12 +419,8 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h1 className="text-lg font-semibold tracking-tight">
-                    Command center
-                  </h1>
-                  <p className="mt-0.5 truncate text-xs text-zinc-500">
-                    {userEmail}
-                  </p>
+                  <h1 className="text-lg font-semibold tracking-tight">Command center</h1>
+                  <p className="mt-0.5 truncate text-xs text-zinc-500">{userEmail}</p>
                 </div>
                 <form action={signOutAction}>
                   <button
@@ -433,13 +431,8 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                   </button>
                 </form>
               </div>
-              <div
-                className={`mt-3 flex items-center gap-2 rounded-lg ${BORDER} bg-white/60 px-3 py-2`}
-              >
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-                  aria-hidden
-                />
+              <div className={`mt-3 flex items-center gap-2 rounded-lg ${BORDER} bg-white/60 px-3 py-2`}>
+                <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden />
                 <span className="text-xs text-zinc-600">
                   Display: <span className="font-medium text-zinc-800">Idle</span>
                 </span>
@@ -460,9 +453,15 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                           : "rounded-br-sm bg-sky-100"
                       }`}
                     >
-                      <p className="whitespace-pre-wrap text-[15px] leading-snug text-zinc-900">
-                        {message.text}
-                      </p>
+                      {message.isClaude ? (
+                        <div className="prose prose-sm prose-zinc max-w-none text-[15px] leading-snug [&_p]:my-0 [&_table]:text-sm [&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1">
+                          <ReactMarkdown>{message.text}</ReactMarkdown>
+                        </div>
+                      ) : (
+                        <p className="whitespace-pre-wrap text-[15px] leading-snug text-zinc-900">
+                          {message.text}
+                        </p>
+                      )}
                     </div>
                     <p className="mt-1 px-0.5 text-[11px] text-zinc-500">
                       {message.sender} · {formatTime(message.timestamp)}
@@ -485,26 +484,18 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             </div>
 
             <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void sendMessage();
-              }}
+              onSubmit={(e) => { e.preventDefault(); void sendMessage(); }}
               className={`shrink-0 ${BORDER} border-x-0 border-b-0 bg-[#f8f7f4] px-3 py-3`}
             >
               <div className="flex items-center gap-2">
-                <label htmlFor="message" className="sr-only">
-                  Message
-                </label>
+                <label htmlFor="message" className="sr-only">Message</label>
                 <input
                   id="message"
                   type="text"
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void sendMessage();
-                    }
+                    if (e.key === "Enter") { e.preventDefault(); void sendMessage(); }
                   }}
                   placeholder="How can I help?"
                   disabled={isLoading}
@@ -522,117 +513,115 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             </form>
           </>
         ) : (
+
+        /* ── Budget tab ────────────────────────────────────────────────────── */
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            <header
-              className={`${BORDER} border-x-0 border-t-0 bg-[#f8f7f4] px-4 pb-4 pt-[max(0.75rem,env(safe-area-inset-top))]`}
-            >
-              <h1 className="text-lg font-semibold tracking-tight">
-                {monthLabel} budget
-              </h1>
-              <p className="mt-0.5 text-sm text-zinc-500">
-                {daysLeft} {daysLeft === 1 ? "day" : "days"} left
-              </p>
-            </header>
-
-            <div className="space-y-3 px-4 pb-4">
-              {plaidLoading ? (
-                <div className={`rounded-xl ${BORDER} bg-white p-8 text-center text-sm text-zinc-500`}>
-                  Loading budget…
-                </div>
-              ) : !plaidConnected ? (
-                <div className={`rounded-xl ${BORDER} bg-white p-8 text-center`}>
-                  <p className="text-sm text-zinc-600">
-                    Connect your Chase account to see real spending data.
+            {budgetLoading ? (
+              <div className="flex h-full items-center justify-center">
+                <p className="text-sm text-zinc-400">Loading…</p>
+              </div>
+            ) : !plaidConnected ? (
+              <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
+                <p className="text-sm text-zinc-600">
+                  Connect your Chase account to see real spending data.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void connectChase()}
+                  disabled={plaidConnecting}
+                  className="rounded-full bg-zinc-900 px-6 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {plaidConnecting ? "Connecting…" : "Connect Chase"}
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Header */}
+                <header
+                  className={`${BORDER} border-x-0 border-t-0 bg-[#f8f7f4] px-4 pb-4 pt-[max(0.75rem,env(safe-area-inset-top))]`}
+                >
+                  <div className="flex items-baseline justify-between">
+                    <h1 className="text-lg font-semibold tracking-tight">
+                      {monthLabel}
+                    </h1>
+                    <span className="text-xs text-zinc-500">
+                      {daysLeft} {daysLeft === 1 ? "day" : "days"} left
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-baseline justify-between">
+                    <span className="text-2xl font-semibold tabular-nums">
+                      {formatDollars(totalSpent)}
+                    </span>
+                    <span className="text-sm text-zinc-500">
+                      of {formatDollars(MONTH_BUDGET)}
+                    </span>
+                  </div>
+                  {/* Overall progress bar */}
+                  <div className={`mt-2 h-2 overflow-hidden rounded-full ${barBg(totalPercent)} ${BORDER}`}>
+                    <div
+                      className={`h-full rounded-full transition-all ${barColor(totalPercent)}`}
+                      style={{ width: `${Math.min(totalPercent, 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-right text-xs tabular-nums text-zinc-500">
+                    {formatDollars(Math.max(0, MONTH_BUDGET - totalSpent))} remaining · {totalPercent}%
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => void connectChase()}
-                    disabled={plaidConnecting}
-                    className="mt-4 rounded-full bg-zinc-900 px-6 py-2.5 text-sm font-medium text-white disabled:opacity-50"
-                  >
-                    {plaidConnecting ? "Connecting…" : "Connect Chase"}
-                  </button>
+                </header>
+
+                {/* Category rows */}
+                <div className="px-4 pb-6 pt-3">
+                  {categories.length === 0 ? (
+                    <p className="py-8 text-center text-sm text-zinc-400">
+                      No transactions this month yet.
+                    </p>
+                  ) : (
+                    <ul className={`divide-y divide-zinc-100 rounded-xl ${BORDER} bg-white`}>
+                      {categories.map((cat) => {
+                        const hasTarget = cat.target !== null;
+                        const percent = hasTarget
+                          ? Math.round((cat.spent / cat.target!) * 100)
+                          : null;
+                        return (
+                          <li key={cat.name} className="px-4 py-3">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="truncate text-sm font-medium text-zinc-800">
+                                {cat.name}
+                              </span>
+                              <span className="shrink-0 tabular-nums text-sm text-zinc-700">
+                                {formatDollars(cat.spent)}
+                                {hasTarget && (
+                                  <span className="ml-1 text-xs text-zinc-400">
+                                    / {formatDollars(cat.target!)}
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                            {hasTarget && percent !== null && (
+                              <>
+                                <div className={`mt-1.5 h-1.5 overflow-hidden rounded-full ${barBg(percent)} ${BORDER}`}>
+                                  <div
+                                    className={`h-full rounded-full ${barColor(percent)}`}
+                                    style={{ width: `${Math.min(percent, 100)}%` }}
+                                  />
+                                </div>
+                                <p className="mt-0.5 text-right text-[11px] tabular-nums text-zinc-400">
+                                  {percent}%
+                                </p>
+                              </>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
                 </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className={`rounded-xl ${BORDER} bg-white p-4`}>
-                      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Spent
-                      </p>
-                      <p className="mt-1 text-2xl font-semibold tabular-nums">
-                        ${budgetMetrics.monthSpent.toLocaleString()}
-                      </p>
-                    </div>
-                    <div className={`rounded-xl ${BORDER} bg-white p-4`}>
-                      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Remaining
-                      </p>
-                      <p className="mt-1 text-2xl font-semibold tabular-nums">
-                        $
-                        {Math.max(
-                          0,
-                          MONTH_BUDGET - budgetMetrics.monthSpent,
-                        ).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className={`rounded-xl ${BORDER} bg-white p-4`}>
-                    <p className="mb-4 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                      By category
-                    </p>
-                    {budgetMetrics.categories.length === 0 ? (
-                      <p className="text-sm text-zinc-500">
-                        No transactions this month yet.
-                      </p>
-                    ) : (
-                      <ul className="space-y-4">
-                        {budgetMetrics.categories.map((cat) => {
-                          const percent = Math.round(
-                            (cat.spent / cat.budget) * 100,
-                          );
-                          const width = Math.min(percent, 100);
-                          return (
-                            <li key={cat.name}>
-                              <div className="mb-1.5 flex items-baseline justify-between gap-2 text-sm">
-                                <span className="font-medium text-zinc-800">
-                                  {cat.name}
-                                </span>
-                                <span className="shrink-0 text-xs tabular-nums text-zinc-500">
-                                  ${cat.spent} / ${cat.budget} · {percent}%
-                                </span>
-                              </div>
-                              <div
-                                className={`h-1.5 overflow-hidden rounded-full bg-zinc-100 ${BORDER}`}
-                              >
-                                <div
-                                  className={`h-full rounded-full ${progressBarColor(percent)}`}
-                                  style={{ width: `${width}%` }}
-                                />
-                              </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </div>
-
-                  <div
-                    className={`rounded-xl ${BORDER} bg-zinc-100/80 p-4 text-sm leading-relaxed text-zinc-600`}
-                  >
-                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                      Recommendation
-                    </p>
-                    <p className="mt-2">{recommendation}</p>
-                  </div>
-                </>
-              )}
-            </div>
+              </>
+            )}
           </div>
         )}
       </div>
 
+      {/* ── Bottom nav ──────────────────────────────────────────────────────── */}
       <nav
         className={`shrink-0 ${BORDER} border-x-0 border-b-0 bg-[#f8f7f4] pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1`}
         role="tablist"
