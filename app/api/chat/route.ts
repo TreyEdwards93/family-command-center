@@ -1,3 +1,4 @@
+import { plaidClient } from "@/lib/plaid";
 import { resolveNameFromEmail } from "@/lib/resolve-name";
 import { createClient } from "@/lib/supabase/server";
 import Anthropic from "@anthropic-ai/sdk";
@@ -31,7 +32,75 @@ const tools: Tool[] = [
       properties: {},
     },
   },
+  {
+    name: "get_budget_summary",
+    description:
+      "Fetch real spending data from Chase via Plaid for the current calendar month. Returns total spent, days remaining, and a breakdown by category. Call this proactively whenever the user asks about spending, budget, categories, or money.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
 ];
+
+type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
+
+type ToolContext = {
+  pushedBy: string;
+  supabase: SupabaseClient;
+  userId: string;
+};
+
+async function getBudgetSummary(supabase: SupabaseClient, userId: string) {
+  const { data: connection } = await supabase
+    .from("plaid_connections")
+    .select("access_token")
+    .eq("user_id", userId)
+    .single();
+
+  if (!connection) {
+    return { connected: false, message: "No Chase account connected yet." };
+  }
+
+  const now = new Date();
+  const startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+    .toISOString()
+    .split("T")[0];
+  const endDate = now.toISOString().split("T")[0];
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const daysRemaining = Math.max(0, lastDay - now.getDate());
+
+  const response = await plaidClient.transactionsGet({
+    access_token: connection.access_token,
+    start_date: startDate,
+    end_date: endDate,
+  });
+
+  const byCategory = new Map<string, number>();
+  let totalSpent = 0;
+
+  for (const t of response.data.transactions) {
+    if (t.amount <= 0) continue;
+    totalSpent += t.amount;
+    const cat = t.category?.[0] ?? "Other";
+    byCategory.set(cat, (byCategory.get(cat) ?? 0) + t.amount);
+  }
+
+  const categories = [...byCategory.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, spent]) => ({ name, spent: Math.round(spent) }));
+
+  return {
+    connected: true,
+    month: now.toLocaleString("en-US", { month: "long", year: "numeric" }),
+    totalSpent: Math.round(totalSpent),
+    monthlyBudget: 6000,
+    remaining: Math.max(0, 6000 - Math.round(totalSpent)),
+    daysRemaining,
+    categories,
+  };
+}
 
 type ClientMessage = {
   role: "user" | "assistant";
@@ -52,7 +121,7 @@ You manage two things: a TRMNL e-ink display in their home, and their household 
 
 Display: The TRMNL is a black and white e-ink screen the family glances at throughout the day. Anything pushed to it must be short and readable in under 5 seconds. Keep reminder text under 40 characters. When someone asks you to push a reminder, do it immediately without asking for confirmation. Confirm after with one short sentence.
 
-Budget: Monthly budget is $6,000 on their Chase card. Categories and targets are based on actual spending history. Be encouraging and forward-looking. Acknowledge what is on track before addressing what is not. Be direct when something needs attention but never shame or lecture.
+Budget: You have a get_budget_summary tool that pulls real transaction data from Chase via Plaid. Call it proactively whenever the user asks about spending, budget, categories, how much they have left, or anything money-related. Don't wait to be asked explicitly. Monthly budget is $6,000. Be encouraging and forward-looking. Acknowledge what is on track before addressing what is not. Be direct when something needs attention but never shame or lecture.
 
 Style: Short and casual. Never use em dashes. No bullet points in responses. Make reasonable assumptions rather than asking clarifying questions. You are action-oriented.
 
@@ -83,7 +152,7 @@ async function postToTrmnl(body: Record<string, unknown>) {
 async function executeTool(
   name: string,
   input: unknown,
-  pushedBy: string,
+  ctx: ToolContext,
 ): Promise<Record<string, unknown>> {
   if (name === "push_reminder") {
     const { text } = input as { text: string };
@@ -91,7 +160,7 @@ async function executeTool(
       merge_variables: {
         state: "reminder",
         reminder_text: text,
-        reminder_by: pushedBy,
+        reminder_by: ctx.pushedBy,
       },
     });
     return { success: true, pushed: text };
@@ -107,6 +176,11 @@ async function executeTool(
     return { success: true };
   }
 
+  if (name === "get_budget_summary") {
+    const summary = await getBudgetSummary(ctx.supabase, ctx.userId);
+    return summary as Record<string, unknown>;
+  }
+
   throw new Error(`Unknown tool: ${name}`);
 }
 
@@ -118,7 +192,7 @@ async function runAgentLoop(
   anthropic: Anthropic,
   messages: MessageParam[],
   system: string,
-  pushedBy: string,
+  ctx: ToolContext,
   onText: (text: string) => void,
 ) {
   while (true) {
@@ -143,11 +217,7 @@ async function runAgentLoop(
         final.content
           .filter((block) => block.type === "tool_use")
           .map(async (block) => {
-            const result = await executeTool(
-              block.name,
-              block.input,
-              pushedBy,
-            );
+            const result = await executeTool(block.name, block.input, ctx);
             return {
               type: "tool_result" as const,
               tool_use_id: block.id,
@@ -207,6 +277,7 @@ export async function POST(request: Request) {
   }));
 
   const anthropic = new Anthropic({ apiKey });
+  const ctx: ToolContext = { pushedBy: name, supabase, userId: user.id };
 
   const readable = new ReadableStream({
     async start(controller) {
@@ -220,7 +291,7 @@ export async function POST(request: Request) {
           anthropic,
           anthropicMessages,
           system,
-          name,
+          ctx,
           (text) => send({ type: "text", text }),
         );
         send({ type: "done" });
