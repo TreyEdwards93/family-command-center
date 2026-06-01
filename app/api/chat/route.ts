@@ -33,12 +33,36 @@ const tools: Tool[] = [
     },
   },
   {
-    name: "get_budget_summary",
+    name: "get_spending_summary",
     description:
-      "Fetch real spending data from Chase via Plaid for the current calendar month. Returns total spent, days remaining, and a breakdown by category. Call this proactively whenever the user asks about spending, budget, categories, or money.",
+      "Fetch real Chase spending data for a specific month via Plaid. Returns total spent, budget, remaining, days remaining, and a full category breakdown with individual transactions (merchant, amount, date). Use for questions about a specific month, category drilldowns, or transaction lookups. Defaults to current month/year if not specified.",
     input_schema: {
       type: "object",
-      properties: {},
+      properties: {
+        month: {
+          type: "number",
+          description: "Month number 1-12. Defaults to current month.",
+        },
+        year: {
+          type: "number",
+          description: "Four-digit year e.g. 2026. Defaults to current year.",
+        },
+      },
+    },
+  },
+  {
+    name: "get_spending_history",
+    description:
+      "Fetch month-by-month spending totals and category breakdowns from Chase via Plaid. Use for trend analysis, comparing months, and setting realistic category targets. Returns category totals per month without individual transactions.",
+    input_schema: {
+      type: "object",
+      properties: {
+        months_back: {
+          type: "number",
+          description:
+            "How many past months to include (default 6, max 24). The current month is always included.",
+        },
+      },
     },
   },
 ];
@@ -51,55 +75,200 @@ type ToolContext = {
   userId: string;
 };
 
-async function getBudgetSummary(supabase: SupabaseClient, userId: string) {
-  const { data: connection } = await supabase
+async function getAccessToken(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<string | null> {
+  const { data } = await supabase
     .from("plaid_connections")
     .select("access_token")
     .eq("user_id", userId)
     .single();
+  return data?.access_token ?? null;
+}
 
-  if (!connection) {
+async function fetchAllTransactions(
+  accessToken: string,
+  startDate: string,
+  endDate: string,
+) {
+  const allTransactions: Awaited<
+    ReturnType<typeof plaidClient.transactionsGet>
+  >["data"]["transactions"] = [];
+
+  let offset = 0;
+  while (true) {
+    const res = await plaidClient.transactionsGet({
+      access_token: accessToken,
+      start_date: startDate,
+      end_date: endDate,
+      options: { count: 500, offset },
+    });
+    allTransactions.push(...res.data.transactions);
+    if (allTransactions.length >= res.data.total_transactions) break;
+    offset = allTransactions.length;
+  }
+
+  return allTransactions;
+}
+
+type CategorySummary = {
+  name: string;
+  total: number;
+  transactions: { merchant: string; amount: number; date: string }[];
+};
+
+function groupByCategory(
+  transactions: Awaited<
+    ReturnType<typeof plaidClient.transactionsGet>
+  >["data"]["transactions"],
+): CategorySummary[] {
+  const map = new Map<string, CategorySummary>();
+
+  for (const t of transactions) {
+    if (t.amount <= 0) continue;
+    const cat = t.category?.[0] ?? "Other";
+    if (!map.has(cat)) map.set(cat, { name: cat, total: 0, transactions: [] });
+    const entry = map.get(cat)!;
+    entry.total += t.amount;
+    entry.transactions.push({
+      merchant: t.merchant_name ?? t.name,
+      amount: Math.round(t.amount * 100) / 100,
+      date: t.date,
+    });
+  }
+
+  return [...map.values()]
+    .map((c) => ({
+      ...c,
+      total: Math.round(c.total * 100) / 100,
+      transactions: c.transactions.sort((a, b) => b.amount - a.amount),
+    }))
+    .sort((a, b) => b.total - a.total);
+}
+
+async function getSpendingSummary(
+  supabase: SupabaseClient,
+  userId: string,
+  month?: number,
+  year?: number,
+) {
+  const accessToken = await getAccessToken(supabase, userId);
+  if (!accessToken) {
     return { connected: false, message: "No Chase account connected yet." };
   }
 
   const now = new Date();
-  const startDate = new Date(now.getFullYear(), now.getMonth(), 1)
-    .toISOString()
-    .split("T")[0];
-  const endDate = now.toISOString().split("T")[0];
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const daysRemaining = Math.max(0, lastDay - now.getDate());
+  const m = (month ?? now.getMonth() + 1) - 1;
+  const y = year ?? now.getFullYear();
 
-  const response = await plaidClient.transactionsGet({
-    access_token: connection.access_token,
-    start_date: startDate,
-    end_date: endDate,
-  });
+  const startDate = new Date(y, m, 1).toISOString().split("T")[0];
+  const lastDay = new Date(y, m + 1, 0).getDate();
+  const isCurrentMonth =
+    y === now.getFullYear() && m === now.getMonth();
+  const endDate = isCurrentMonth
+    ? now.toISOString().split("T")[0]
+    : new Date(y, m, lastDay).toISOString().split("T")[0];
+  const daysRemaining = isCurrentMonth
+    ? Math.max(0, lastDay - now.getDate())
+    : 0;
 
-  const byCategory = new Map<string, number>();
-  let totalSpent = 0;
-
-  for (const t of response.data.transactions) {
-    if (t.amount <= 0) continue;
-    totalSpent += t.amount;
-    const cat = t.category?.[0] ?? "Other";
-    byCategory.set(cat, (byCategory.get(cat) ?? 0) + t.amount);
-  }
-
-  const categories = [...byCategory.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([name, spent]) => ({ name, spent: Math.round(spent) }));
+  const transactions = await fetchAllTransactions(
+    accessToken,
+    startDate,
+    endDate,
+  );
+  const categories = groupByCategory(transactions);
+  const totalSpent = Math.round(
+    categories.reduce((s, c) => s + c.total, 0) * 100,
+  ) / 100;
+  const budget = 6000;
 
   return {
     connected: true,
-    month: now.toLocaleString("en-US", { month: "long", year: "numeric" }),
-    totalSpent: Math.round(totalSpent),
-    monthlyBudget: 6000,
-    remaining: Math.max(0, 6000 - Math.round(totalSpent)),
-    daysRemaining,
+    month: new Date(y, m, 1).toLocaleString("en-US", {
+      month: "long",
+      year: "numeric",
+    }),
+    total_spent: totalSpent,
+    budget,
+    remaining: Math.max(0, Math.round((budget - totalSpent) * 100) / 100),
+    days_remaining: daysRemaining,
     categories,
   };
+}
+
+async function getSpendingHistory(
+  supabase: SupabaseClient,
+  userId: string,
+  monthsBack = 6,
+) {
+  const accessToken = await getAccessToken(supabase, userId);
+  if (!accessToken) {
+    return { connected: false, message: "No Chase account connected yet." };
+  }
+
+  const clampedMonths = Math.min(Math.max(monthsBack, 1), 24);
+  const now = new Date();
+
+  const startOfEarliest = new Date(
+    now.getFullYear(),
+    now.getMonth() - clampedMonths + 1,
+    1,
+  );
+  const startDate = startOfEarliest.toISOString().split("T")[0];
+  const endDate = now.toISOString().split("T")[0];
+
+  const transactions = await fetchAllTransactions(
+    accessToken,
+    startDate,
+    endDate,
+  );
+
+  const monthMap = new Map<
+    string,
+    { month: number; year: number; categories: Map<string, number> }
+  >();
+
+  for (const t of transactions) {
+    if (t.amount <= 0) continue;
+    const d = new Date(`${t.date}T12:00:00`);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!monthMap.has(key)) {
+      monthMap.set(key, {
+        month: d.getMonth() + 1,
+        year: d.getFullYear(),
+        categories: new Map(),
+      });
+    }
+    const entry = monthMap.get(key)!;
+    const cat = t.category?.[0] ?? "Other";
+    entry.categories.set(cat, (entry.categories.get(cat) ?? 0) + t.amount);
+  }
+
+  const history = [...monthMap.values()]
+    .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month)
+    .map(({ month, year, categories }) => {
+      const cats = [...categories.entries()]
+        .map(([name, total]) => ({
+          name,
+          total: Math.round(total * 100) / 100,
+        }))
+        .sort((a, b) => b.total - a.total);
+      const totalSpent = Math.round(cats.reduce((s, c) => s + c.total, 0) * 100) / 100;
+      return {
+        month,
+        year,
+        month_label: new Date(year, month - 1, 1).toLocaleString("en-US", {
+          month: "long",
+          year: "numeric",
+        }),
+        total_spent: totalSpent,
+        categories: cats,
+      };
+    });
+
+  return { connected: true, months: history };
 }
 
 type ClientMessage = {
@@ -121,7 +290,12 @@ You manage two things: a TRMNL e-ink display in their home, and their household 
 
 Display: The TRMNL is a black and white e-ink screen the family glances at throughout the day. Anything pushed to it must be short and readable in under 5 seconds. Keep reminder text under 40 characters. When someone asks you to push a reminder, do it immediately without asking for confirmation. Confirm after with one short sentence.
 
-Budget: You have a get_budget_summary tool that pulls real transaction data from Chase via Plaid. Call it proactively whenever the user asks about spending, budget, categories, how much they have left, or anything money-related. Don't wait to be asked explicitly. Monthly budget is $6,000. Be encouraging and forward-looking. Acknowledge what is on track before addressing what is not. Be direct when something needs attention but never shame or lecture.
+Budget: You have two spending tools that pull real Chase transaction data via Plaid. Use them proactively on any money-related question without waiting to be asked.
+
+- get_spending_summary: use for questions about a specific month, remaining budget, category drilldowns, or individual transaction lookups. Defaults to current month.
+- get_spending_history: use for trend analysis, comparing months, or helping set realistic targets. Fetches up to 24 months of category totals.
+
+Monthly budget is $6,000. Be encouraging and forward-looking. Acknowledge what is on track before addressing what is not. Be direct when something needs attention but never shame or lecture.
 
 Style: Short and casual. Never use em dashes. No bullet points in responses. Make reasonable assumptions rather than asking clarifying questions. You are action-oriented.
 
@@ -176,9 +350,28 @@ async function executeTool(
     return { success: true };
   }
 
-  if (name === "get_budget_summary") {
-    const summary = await getBudgetSummary(ctx.supabase, ctx.userId);
-    return summary as Record<string, unknown>;
+  if (name === "get_spending_summary") {
+    const { month, year } = (input ?? {}) as {
+      month?: number;
+      year?: number;
+    };
+    const result = await getSpendingSummary(
+      ctx.supabase,
+      ctx.userId,
+      month,
+      year,
+    );
+    return result as Record<string, unknown>;
+  }
+
+  if (name === "get_spending_history") {
+    const { months_back } = (input ?? {}) as { months_back?: number };
+    const result = await getSpendingHistory(
+      ctx.supabase,
+      ctx.userId,
+      months_back,
+    );
+    return result as Record<string, unknown>;
   }
 
   throw new Error(`Unknown tool: ${name}`);
