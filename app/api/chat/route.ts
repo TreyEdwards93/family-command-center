@@ -65,6 +65,25 @@ const tools: Tool[] = [
       },
     },
   },
+  {
+    name: "save_memory",
+    description:
+      "Persist a piece of household knowledge so it's available in every future conversation. Use proactively when the user shares budget targets, recurring expenses, preferences, or any fact worth remembering. key should be a short snake_case identifier (e.g. 'grocery_budget', 'rent_amount'). value is the plain-text fact to remember.",
+    input_schema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "Short snake_case identifier for the memory",
+        },
+        value: {
+          type: "string",
+          description: "The fact or preference to store",
+        },
+      },
+      required: ["key", "value"],
+    },
+  },
 ];
 
 type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
@@ -164,8 +183,7 @@ async function getSpendingSummary(
 
   const startDate = new Date(y, m, 1).toISOString().split("T")[0];
   const lastDay = new Date(y, m + 1, 0).getDate();
-  const isCurrentMonth =
-    y === now.getFullYear() && m === now.getMonth();
+  const isCurrentMonth = y === now.getFullYear() && m === now.getMonth();
   const endDate = isCurrentMonth
     ? now.toISOString().split("T")[0]
     : new Date(y, m, lastDay).toISOString().split("T")[0];
@@ -178,10 +196,13 @@ async function getSpendingSummary(
     startDate,
     endDate,
   );
+
+  const allDates = transactions.map((t) => t.date).sort();
+  const earliestTransactionDate = allDates[0] ?? null;
+
   const categories = groupByCategory(transactions);
-  const totalSpent = Math.round(
-    categories.reduce((s, c) => s + c.total, 0) * 100,
-  ) / 100;
+  const totalSpent =
+    Math.round(categories.reduce((s, c) => s + c.total, 0) * 100) / 100;
   const budget = 6000;
 
   return {
@@ -194,6 +215,7 @@ async function getSpendingSummary(
     budget,
     remaining: Math.max(0, Math.round((budget - totalSpent) * 100) / 100),
     days_remaining: daysRemaining,
+    earliest_transaction_date: earliestTransactionDate,
     categories,
   };
 }
@@ -268,7 +290,34 @@ async function getSpendingHistory(
       };
     });
 
-  return { connected: true, months: history };
+  const allDates = transactions.map((t) => t.date).sort();
+  const earliestTransactionDate = allDates[0] ?? null;
+
+  return { connected: true, earliest_transaction_date: earliestTransactionDate, months: history };
+}
+
+async function loadMemories(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<Record<string, string>> {
+  const { data } = await supabase
+    .from("memories")
+    .select("key, value")
+    .eq("user_id", userId);
+  if (!data) return {};
+  return Object.fromEntries(data.map((r) => [r.key, r.value]));
+}
+
+async function saveMemory(
+  supabase: SupabaseClient,
+  userId: string,
+  key: string,
+  value: string,
+) {
+  await supabase.from("memories").upsert(
+    { user_id: userId, key, value, updated_at: new Date().toISOString() },
+    { onConflict: "user_id,key" },
+  );
 }
 
 type ClientMessage = {
@@ -276,13 +325,23 @@ type ClientMessage = {
   content: string;
 };
 
-function buildSystemPrompt(name: string): string {
+function buildSystemPrompt(
+  name: string,
+  memories: Record<string, string>,
+): string {
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric",
   });
+
+  const memoryBlock =
+    Object.keys(memories).length > 0
+      ? `\nStored memory:\n${Object.entries(memories)
+          .map(([k, v]) => `- ${k}: ${v}`)
+          .join("\n")}\n`
+      : "";
 
   return `You are the command center assistant for the Edwards family. The household is Trey, Channing, and their newborn Theo.
 
@@ -292,10 +351,12 @@ Display: The TRMNL is a black and white e-ink screen the family glances at throu
 
 Budget: You have two spending tools that pull real Chase transaction data via Plaid. Use them proactively on any money-related question without waiting to be asked.
 
-- get_spending_summary: use for questions about a specific month, remaining budget, category drilldowns, or individual transaction lookups. Defaults to current month.
-- get_spending_history: use for trend analysis, comparing months, or helping set realistic targets. Fetches up to 24 months of category totals.
+- get_spending_summary: use for questions about a specific month, remaining budget, category drilldowns, or individual transaction lookups. Defaults to current month. The response includes earliest_transaction_date so you know the actual data window — use it to explain data availability rather than guessing Plaid's range.
+- get_spending_history: use for trend analysis, comparing months, or helping set realistic targets. Fetches up to 24 months of category totals. Also includes earliest_transaction_date.
 
 Monthly budget is $6,000. Be encouraging and forward-looking. Acknowledge what is on track before addressing what is not. Be direct when something needs attention but never shame or lecture.
+
+Memory: Use save_memory proactively when the user shares budget targets, recurring expenses, preferences, or any fact worth keeping. Stored memories are injected into every conversation so you always have context.
 
 Style: Short and casual. Never use em dashes. No bullet points in responses. Make reasonable assumptions rather than asking clarifying questions. You are action-oriented.
 
@@ -303,7 +364,7 @@ Current context:
 Date: ${today}
 Display state: Idle
 Currently talking to: ${name}
-`;
+${memoryBlock}`;
 }
 
 async function postToTrmnl(body: Record<string, unknown>) {
@@ -372,6 +433,12 @@ async function executeTool(
       months_back,
     );
     return result as Record<string, unknown>;
+  }
+
+  if (name === "save_memory") {
+    const { key, value } = input as { key: string; value: string };
+    await saveMemory(ctx.supabase, ctx.userId, key, value);
+    return { success: true, saved: { key, value } };
   }
 
   throw new Error(`Unknown tool: ${name}`);
@@ -463,7 +530,8 @@ export async function POST(request: Request) {
   }
 
   const name = resolveNameFromEmail(userEmail);
-  const system = buildSystemPrompt(name);
+  const memories = await loadMemories(supabase, user.id);
+  const system = buildSystemPrompt(name, memories);
   const anthropicMessages: MessageParam[] = clientMessages.map((m) => ({
     role: m.role,
     content: m.content,

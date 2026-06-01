@@ -506,7 +506,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                       void sendMessage();
                     }
                   }}
-                  placeholder="Message the family…"
+                  placeholder="How can I help?"
                   disabled={isLoading}
                   className={`h-11 min-w-0 flex-1 rounded-full ${BORDER} bg-white px-4 text-[15px] text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-300 disabled:opacity-50`}
                 />
