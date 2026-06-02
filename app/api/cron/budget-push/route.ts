@@ -126,12 +126,8 @@ export async function GET(request: Request) {
     return b.percent - a.percent;
   });
 
-  const top4 = catRows.slice(0, 4);
-
-  // Pad to exactly 4 entries so the template always has cat1–cat4
-  while (top4.length < 4) {
-    top4.push({ name: "", spent: 0, target: 0, percent: 0 });
-  }
+  // Only include categories with actual spend, up to 4
+  const top4 = catRows.filter((c) => c.spent > 0).slice(0, 4);
 
   const monthlyPace = Math.round((totalSpent / daysElapsed) * daysInMonth);
   const percentUsed = Math.round((totalSpent / MONTH_BUDGET) * 100);

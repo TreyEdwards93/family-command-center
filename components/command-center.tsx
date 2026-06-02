@@ -3,6 +3,7 @@
 import { resolveNameFromEmail } from "@/lib/resolve-name";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { usePlaidLink } from "react-plaid-link";
 
 type Tab = "chat" | "budget";
@@ -470,7 +471,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                     >
                       {message.isClaude ? (
                         <div className="prose prose-sm prose-zinc max-w-none text-[15px] leading-snug [&_p]:my-0 [&_table]:text-sm [&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1">
-                          <ReactMarkdown>{message.text}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
                         </div>
                       ) : (
                         <p className="whitespace-pre-wrap text-[15px] leading-snug text-zinc-900">
