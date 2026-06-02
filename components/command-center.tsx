@@ -94,7 +94,7 @@ function buildCategories(
     if (t.amount <= 0) continue;
     const d = new Date(`${t.date}T12:00:00`);
     if (d.getMonth() !== month || d.getFullYear() !== year) continue;
-    const cat = t.category?.[0] ?? "Other";
+    const cat = (t as { personal_finance_category?: { primary?: string } }).personal_finance_category?.primary ?? t.category?.[0] ?? "Other";
     spendMap.set(cat, (spendMap.get(cat) ?? 0) + t.amount);
   }
 

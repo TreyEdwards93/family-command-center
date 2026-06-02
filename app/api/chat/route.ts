@@ -121,7 +121,7 @@ async function fetchAllTransactions(
       access_token: accessToken,
       start_date: startDate,
       end_date: endDate,
-      options: { count: 500, offset },
+      options: { count: 500, offset, include_personal_finance_category: true },
     });
     allTransactions.push(...res.data.transactions);
     if (allTransactions.length >= res.data.total_transactions) break;
@@ -146,7 +146,7 @@ function groupByCategory(
 
   for (const t of transactions) {
     if (t.amount <= 0) continue;
-    const cat = t.category?.[0] ?? "Other";
+    const cat = t.personal_finance_category?.primary ?? t.category?.[0] ?? "Other";
     if (!map.has(cat)) map.set(cat, { name: cat, total: 0, transactions: [] });
     const entry = map.get(cat)!;
     entry.total += t.amount;
@@ -264,7 +264,7 @@ async function getSpendingHistory(
       });
     }
     const entry = monthMap.get(key)!;
-    const cat = t.category?.[0] ?? "Other";
+    const cat = t.personal_finance_category?.primary ?? t.category?.[0] ?? "Other";
     entry.categories.set(cat, (entry.categories.get(cat) ?? 0) + t.amount);
   }
 

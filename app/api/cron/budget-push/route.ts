@@ -66,7 +66,7 @@ export async function GET(request: Request) {
       access_token: connection.access_token,
       start_date: startDate,
       end_date: endDate,
-      options: { count: 500, offset, include_personal_finance_category: false },
+      options: { count: 500, offset, include_personal_finance_category: true },
     });
     allTx.push(...res.data.transactions);
     if (allTx.length >= res.data.total_transactions) break;
@@ -79,7 +79,7 @@ export async function GET(request: Request) {
   for (const t of allTx) {
     if (t.amount <= 0) continue;
     totalSpent += t.amount;
-    const cat = t.category?.[0] ?? "Other";
+    const cat = t.personal_finance_category?.primary ?? t.category?.[0] ?? "Other";
     spendMap.set(cat, (spendMap.get(cat) ?? 0) + t.amount);
   }
   totalSpent = Math.round(totalSpent);

@@ -32,6 +32,11 @@ export async function GET() {
     access_token: connection.access_token,
     start_date: startDate,
     end_date: endDate,
+    options: {
+      count: 500,
+      offset: 0,
+      include_personal_finance_category: true,
+    },
   });
 
   return NextResponse.json({
