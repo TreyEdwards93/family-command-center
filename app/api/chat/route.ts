@@ -1,5 +1,6 @@
 import { plaidClient } from "@/lib/plaid";
 import { resolveNameFromEmail } from "@/lib/resolve-name";
+import { getTheoAgeLabel } from "@/lib/theo";
 import { createClient } from "@/lib/supabase/server";
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam, Tool } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
@@ -343,7 +344,10 @@ function buildSystemPrompt(
           .join("\n")}\n`
       : "";
 
-  return `You are the command center assistant for the Edwards family. The household is Trey, Channing, and their newborn Theo.
+  const theoAge = getTheoAgeLabel();
+  const theoLine = theoAge ? `Theo was born May 13, 2026 and is currently ${theoAge}.` : "Theo was born May 13, 2026.";
+
+  return `You are the command center assistant for the Edwards family. The household is Trey, Channing, and their son Theo. ${theoLine}
 
 You manage two things: a TRMNL e-ink display in their home, and their household budget.
 

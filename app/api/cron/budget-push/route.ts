@@ -21,6 +21,37 @@ function parseTargets(raw: string | undefined): Record<string, number> {
   }
 }
 
+// Convert Plaid primary category keys to human-readable names
+// e.g. "FOOD_AND_DRINK" → "Food and Drink"
+function formatCategoryName(plaidKey: string): string {
+  const overrides: Record<string, string> = {
+    FOOD_AND_DRINK: "Food and Drink",
+    GENERAL_MERCHANDISE: "General Merchandise",
+    RENT_AND_UTILITIES: "Rent and Utilities",
+    TRAVEL: "Travel",
+    ENTERTAINMENT: "Entertainment",
+    HEALTHCARE: "Healthcare",
+    PERSONAL_CARE: "Personal Care",
+    GENERAL_SERVICES: "General Services",
+    GOVERNMENT_AND_NON_PROFIT: "Government and Non-Profit",
+    HOME_IMPROVEMENT: "Home Improvement",
+    INCOME: "Income",
+    LOAN_PAYMENTS: "Loan Payments",
+    TRANSFER_IN: "Transfer In",
+    TRANSFER_OUT: "Transfer Out",
+    OTHER: "Other",
+  };
+  return overrides[plaidKey] ?? plaidKey
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+// Normalize a string for target lookup: lowercase, underscores → spaces
+function normalizeKey(s: string): string {
+  return s.toLowerCase().replace(/_/g, " ");
+}
+
 export async function GET(request: Request) {
   // Verify Vercel cron secret
   const auth = request.headers.get("authorization") ?? "";
@@ -112,8 +143,16 @@ export async function GET(request: Request) {
     percent: number;
   };
 
-  const catRows: CatRow[] = [...spendMap.entries()].map(([name, spent]) => {
-    const target = targets[name] ?? targets[name.toLowerCase()] ?? 0;
+  const catRows: CatRow[] = [...spendMap.entries()].map(([plaidKey, spent]) => {
+    const name = formatCategoryName(plaidKey);
+    const normalizedPlaid = normalizeKey(plaidKey);
+    // Match targets by: exact name, normalized plaid key, or normalized target key
+    const target =
+      targets[name] ??
+      Object.entries(targets).find(
+        ([k]) => normalizeKey(k) === normalizedPlaid || normalizeKey(k) === normalizeKey(name),
+      )?.[1] ??
+      0;
     const percent = target > 0 ? Math.round((spent / target) * 100) : 0;
     return { name, spent: Math.round(spent), target, percent };
   });
@@ -129,9 +168,13 @@ export async function GET(request: Request) {
   // Only include categories with actual spend, up to 4
   const top4 = catRows.filter((c) => c.spent > 0).slice(0, 4);
 
-  const monthlyPace = Math.round((totalSpent / daysElapsed) * daysInMonth);
+  // Only project after 5 days in to avoid wild early-month numbers
+  const showProjection = daysElapsed >= 5;
+  const monthlyPace = showProjection
+    ? Math.round((totalSpent / daysElapsed) * daysInMonth)
+    : 0;
   const percentUsed = Math.round((totalSpent / MONTH_BUDGET) * 100);
-  const onPace = monthlyPace <= MONTH_BUDGET;
+  const onPace = !showProjection || monthlyPace <= MONTH_BUDGET;
 
   const mergeVariables: Record<string, string | number | boolean> = {
     state: "budget",
@@ -142,6 +185,7 @@ export async function GET(request: Request) {
     percent_used: percentUsed,
     monthly_pace: monthlyPace,
     on_pace: onPace,
+    show_projection: showProjection,
   };
 
   top4.forEach((cat, i) => {

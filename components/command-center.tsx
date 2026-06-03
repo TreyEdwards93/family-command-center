@@ -1,12 +1,17 @@
 "use client";
 
+import { getTheoAgeLabel } from "@/lib/theo";
+import { detectUpcomingBills, getBillIcon } from "@/lib/upcoming-bills";
+import type { PlaidTx, UpcomingBill } from "@/lib/upcoming-bills";
 import { resolveNameFromEmail } from "@/lib/resolve-name";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { usePlaidLink } from "react-plaid-link";
 
-type Tab = "chat" | "budget";
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type Tab = "home" | "chat" | "budget";
 
 type ChatMessage = {
   id: string;
@@ -16,16 +21,50 @@ type ChatMessage = {
   timestamp: Date;
 };
 
-const BORDER = "border-[0.5px] border-zinc-200";
-const BG = "bg-[#f8f7f4]";
+type ApiMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type CategoryRow = {
+  name: string;
+  spent: number;
+  target: number | null;
+};
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
+
+const T = {
+  bg: "#0e1521",
+  card: "#162032",
+  cardBorder: "0.5px solid rgba(255,255,255,0.08)",
+  cardBorderAmber: "0.5px solid rgba(245,166,35,0.2)",
+  cardBorderGreen: "0.5px solid rgba(16,185,129,0.2)",
+  amber: "#f5a623",
+  green: "#10b981",
+  warn: "#f59e0b",
+  muted: "#6b7a99",
+  text: "#e2e8f0",
+  divider: "rgba(255,255,255,0.06)",
+  trackBg: "rgba(255,255,255,0.08)",
+} as const;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 const MONTH_BUDGET = 6000;
+
+function formatDollars(n: number) {
+  return "$" + Math.round(n).toLocaleString();
+}
 
 function formatTime(date: Date) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function formatDollars(n: number) {
-  return "$" + Math.round(n).toLocaleString();
+function toApiMessages(messages: ChatMessage[]): ApiMessage[] {
+  return messages
+    .filter((m) => m.text.trim().length > 0)
+    .map((m) => ({ role: m.isClaude ? "assistant" : "user", content: m.text }));
 }
 
 function getInitialMessages(userEmail: string): ChatMessage[] {
@@ -35,109 +74,19 @@ function getInitialMessages(userEmail: string): ChatMessage[] {
       id: "welcome",
       sender: "Claude",
       isClaude: true,
-      text: `Hey ${name}, what do you need?`,
+      text: `Hey ${name} ✊🏾 — what do you need?`,
       timestamp: new Date(),
     },
   ];
 }
 
-type ApiMessage = {
-  role: "user" | "assistant";
-  content: string;
-};
-
-function toApiMessages(messages: ChatMessage[]): ApiMessage[] {
-  return messages
-    .filter((m) => m.text.trim().length > 0)
-    .map((m) => ({
-      role: m.isClaude ? "assistant" : "user",
-      content: m.text,
-    }));
-}
-
-function barColor(percent: number) {
-  if (percent >= 100) return "bg-red-500";
-  if (percent >= 85) return "bg-amber-400";
-  return "bg-emerald-500";
-}
-
-function barBg(percent: number) {
-  if (percent >= 100) return "bg-red-50";
-  if (percent >= 85) return "bg-amber-50";
-  return "bg-zinc-100";
-}
-
-type PlaidTransaction = {
-  amount: number;
-  date: string;
-  category: string[] | null;
-  merchant_name?: string | null;
-  name: string;
-};
-
-type CategoryRow = {
-  name: string;
-  spent: number;
-  target: number | null;
-};
-
-function buildCategories(
-  transactions: PlaidTransaction[],
-  targets: Record<string, number>,
-): CategoryRow[] {
-  const now = new Date();
-  const month = now.getMonth();
-  const year = now.getFullYear();
-
-  const spendMap = new Map<string, number>();
-  for (const t of transactions) {
-    if (t.amount <= 0) continue;
-    const d = new Date(`${t.date}T12:00:00`);
-    if (d.getMonth() !== month || d.getFullYear() !== year) continue;
-    const cat = (t as { personal_finance_category?: { primary?: string } }).personal_finance_category?.primary ?? t.category?.[0] ?? "Other";
-    spendMap.set(cat, (spendMap.get(cat) ?? 0) + t.amount);
-  }
-
-  // Resolve a target for a category name (case-insensitive fallback)
-  const resolveTarget = (name: string): number | null =>
-    targets[name] ?? targets[name.toLowerCase()] ?? null;
-
-  // Build rows from actual spend
-  const rows: CategoryRow[] = [...spendMap.entries()].map(([name, spent]) => ({
-    name,
-    spent,
-    target: resolveTarget(name),
-  }));
-
-  // Add zero-spend rows for every target category not already in the list
-  const spentNames = new Set(rows.map((r) => r.name.toLowerCase()));
-  for (const [targetName, targetAmount] of Object.entries(targets)) {
-    if (!spentNames.has(targetName.toLowerCase())) {
-      rows.push({ name: targetName, spent: 0, target: targetAmount });
-    }
-  }
-
-  // Sort: categories with spend first (descending), then zero-spend rows by target descending
-  return rows.sort((a, b) => {
-    if (a.spent !== b.spent) return b.spent - a.spent;
-    return (b.target ?? 0) - (a.target ?? 0);
-  });
-}
-
 function parseTargets(memories: Record<string, string>): Record<string, number> {
   const out: Record<string, number> = {};
-
-  // Check for a single budget_targets JSON blob Claude may have saved
   if (memories["budget_targets"]) {
     try {
-      const parsed = JSON.parse(memories["budget_targets"]) as Record<string, number>;
-      Object.assign(out, parsed);
-    } catch {
-      // not JSON, ignore
-    }
+      Object.assign(out, JSON.parse(memories["budget_targets"]) as Record<string, number>);
+    } catch { /* ignore */ }
   }
-
-  // Also pick up individual budget_target_* keys
   for (const [k, v] of Object.entries(memories)) {
     if (k.startsWith("budget_target_")) {
       const cat = k.replace("budget_target_", "").replace(/_/g, " ");
@@ -145,67 +94,596 @@ function parseTargets(memories: Record<string, string>): Record<string, number> 
       if (!isNaN(num)) out[cat] = num;
     }
   }
-
   return out;
 }
 
-function MessageIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      aria-hidden
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M8 10h8M8 14h5M6 4h12a2 2 0 012 2v9a2 2 0 01-2 2H9l-4 3V6a2 2 0 012-2z"
-      />
-    </svg>
-  );
+function buildCategories(transactions: PlaidTx[], targets: Record<string, number>): CategoryRow[] {
+  const now = new Date();
+  const month = now.getMonth();
+  const year = now.getFullYear();
+  const spendMap = new Map<string, number>();
+
+  for (const t of transactions) {
+    if (t.amount <= 0) continue;
+    const d = new Date(`${t.date}T12:00:00`);
+    if (d.getMonth() !== month || d.getFullYear() !== year) continue;
+    const cat =
+      t.personal_finance_category?.primary ??
+      t.category?.[0] ??
+      "Other";
+    spendMap.set(cat, (spendMap.get(cat) ?? 0) + t.amount);
+  }
+
+  const normalizeKey = (s: string) => s.toLowerCase().replace(/_/g, " ");
+  const resolveTarget = (name: string): number | null => {
+    if (targets[name] !== undefined) return targets[name];
+    const entry = Object.entries(targets).find(
+      ([k]) => normalizeKey(k) === normalizeKey(name),
+    );
+    return entry?.[1] ?? null;
+  };
+
+  const formatName = (plaidKey: string): string => {
+    const overrides: Record<string, string> = {
+      FOOD_AND_DRINK: "Food and Drink",
+      GENERAL_MERCHANDISE: "General Merchandise",
+      RENT_AND_UTILITIES: "Rent and Utilities",
+      TRAVEL: "Travel",
+      ENTERTAINMENT: "Entertainment",
+      HEALTHCARE: "Healthcare",
+      PERSONAL_CARE: "Personal Care",
+      GENERAL_SERVICES: "General Services",
+      GOVERNMENT_AND_NON_PROFIT: "Government and Non-Profit",
+      HOME_IMPROVEMENT: "Home Improvement",
+      LOAN_PAYMENTS: "Loan Payments",
+      TRANSFER_IN: "Transfer In",
+      TRANSFER_OUT: "Transfer Out",
+      OTHER: "Other",
+    };
+    return overrides[plaidKey] ?? plaidKey.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+  };
+
+  const rows: CategoryRow[] = [...spendMap.entries()].map(([key, spent]) => ({
+    name: formatName(key),
+    spent,
+    target: resolveTarget(formatName(key)),
+  }));
+
+  const spentNames = new Set(rows.map((r) => r.name.toLowerCase()));
+  for (const [targetName, targetAmount] of Object.entries(targets)) {
+    if (!spentNames.has(targetName.toLowerCase())) {
+      rows.push({ name: targetName, spent: 0, target: targetAmount });
+    }
+  }
+
+  return rows.sort((a, b) => b.spent - a.spent);
 }
 
-function ChartIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      aria-hidden
-    >
-      <path strokeLinecap="round" d="M5 19V9M12 19V5M19 19v-7" />
-    </svg>
-  );
+function getSpendingInsight(categories: CategoryRow[]): string | null {
+  const now = new Date();
+  const daysElapsed = Math.max(now.getDate(), 1);
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+  for (const cat of categories) {
+    if (!cat.target || cat.target === 0 || cat.spent === 0) continue;
+    const pace = (cat.spent / daysElapsed) * daysInMonth;
+    const overage = Math.round(pace - cat.target);
+    const pct = Math.round((cat.spent / cat.target) * 100);
+    if (pct >= 50 && overage > 0) {
+      return `${cat.name} is ${pct}% used — on pace to go over by ~${formatDollars(overage)}`;
+    }
+  }
+  return null;
 }
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
 
 function SendIcon() {
   return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      aria-hidden
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M5 12h14M13 6l6 6-6 6"
-      />
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M13 6l6 6-6 6" />
     </svg>
   );
 }
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function Card({
+  children,
+  border = T.cardBorder,
+  style,
+}: {
+  children: React.ReactNode;
+  border?: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <div
+      style={{
+        background: T.card,
+        borderRadius: 16,
+        border,
+        padding: "14px 16px",
+        marginBottom: 10,
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function CardLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: T.muted, marginBottom: 10 }}>
+      {children}
+    </div>
+  );
+}
+
+function ProgressBar({ pct, color }: { pct: number; color?: string }) {
+  return (
+    <div style={{ background: T.trackBg, height: 5, borderRadius: 3, overflow: "hidden" }}>
+      <div style={{ background: color ?? T.amber, height: "100%", width: `${Math.min(pct, 100)}%`, borderRadius: 3, transition: "width 0.4s ease" }} />
+    </div>
+  );
+}
+
+function catBarColor(pct: number | null): string {
+  if (pct === null) return T.muted;
+  if (pct >= 100) return "#ef4444";
+  if (pct >= 75) return T.warn;
+  return T.green;
+}
+
+// ── Home Tab ──────────────────────────────────────────────────────────────────
+
+function HomeTab({
+  userEmail,
+  transactions,
+  targets,
+  budgetLoading,
+  plaidConnected,
+  categories,
+  totalSpent,
+  upcomingBills,
+  onQuickAction,
+}: {
+  userEmail: string;
+  transactions: PlaidTx[];
+  targets: Record<string, number>;
+  budgetLoading: boolean;
+  plaidConnected: boolean;
+  categories: CategoryRow[];
+  totalSpent: number;
+  upcomingBills: UpcomingBill[];
+  onQuickAction: (prompt: string) => void;
+}) {
+  const name = resolveNameFromEmail(userEmail);
+  const theoAge = getTheoAgeLabel();
+  const now = new Date();
+  const daysLeft = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate();
+  const monthLabel = now.toLocaleDateString("en-US", { month: "long" });
+  const totalPercent = Math.round((totalSpent / MONTH_BUDGET) * 100);
+  const insight = getSpendingInsight(categories);
+  const topCats = categories.filter((c) => c.spent > 0).slice(0, 3);
+
+  const hour = now.getHours();
+  const timeLabel = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const dayLabel = now.toLocaleDateString("en-US", { weekday: "long" });
+
+  const quickActions = [
+    { icon: "📌", title: "Push reminder", desc: "To the display", prompt: "Push reminder: " },
+    { icon: "📊", title: "Month recap", desc: "How are we doing?", prompt: "How are we doing on the budget this month?" },
+    { icon: "🎯", title: "Set a target", desc: "For a category", prompt: "Set a budget target for " },
+    { icon: "📅", title: "Bill history", desc: "Recurring charges", prompt: "Show me our recurring monthly bills" },
+  ];
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "0 14px 100px" }}>
+      {/* Greeting */}
+      <div style={{ padding: "12px 4px 14px" }}>
+        <div style={{ fontSize: 12, color: T.muted }}>{dayLabel} · {timeLabel}</div>
+        <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.5px", marginTop: 3, color: "#fff" }}>
+          Hey {name} ✊🏾
+        </div>
+        {theoAge && (
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            background: "rgba(139,92,246,0.15)", border: "0.5px solid rgba(139,92,246,0.3)",
+            borderRadius: 20, padding: "4px 11px", fontSize: 11, color: "#a78bfa", marginTop: 8,
+          }}>
+            🍼 Theo is {theoAge} today
+          </div>
+        )}
+      </div>
+
+      {/* Budget card */}
+      <Card border={T.cardBorderAmber}>
+        <CardLabel>{monthLabel} budget</CardLabel>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 10 }}>
+          <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.5px", color: "#fff" }}>
+            {formatDollars(totalSpent)}
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 11, color: T.muted }}>of {formatDollars(MONTH_BUDGET)}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: T.green, marginTop: 2 }}>
+              {formatDollars(Math.max(0, MONTH_BUDGET - totalSpent))} left
+            </div>
+          </div>
+        </div>
+        <ProgressBar pct={totalPercent} color={totalPercent >= 90 ? "#ef4444" : totalPercent >= 75 ? T.warn : T.amber} />
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: T.muted }}>
+          <span>{totalPercent}% used</span>
+          <span>{daysLeft} days left</span>
+        </div>
+
+        {/* Top categories */}
+        {budgetLoading ? (
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 12 }}>Loading…</div>
+        ) : plaidConnected && topCats.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+            {topCats.map((cat) => {
+              const pct = cat.target ? Math.round((cat.spent / cat.target) * 100) : null;
+              return (
+                <div key={cat.name}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                    <span style={{ fontSize: 11, color: T.text }}>{cat.name}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "#fff" }}>
+                      {formatDollars(cat.spent)}
+                      {cat.target ? <span style={{ color: T.muted, fontWeight: 400 }}> / {formatDollars(cat.target)}</span> : null}
+                    </span>
+                  </div>
+                  <ProgressBar pct={pct ?? 40} color={catBarColor(pct)} />
+                </div>
+              );
+            })}
+          </div>
+        ) : !plaidConnected ? (
+          <div style={{ fontSize: 11, color: T.muted, marginTop: 10 }}>Connect Chase to see category breakdown</div>
+        ) : null}
+      </Card>
+
+      {/* AI insight */}
+      {insight && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8,
+          background: "rgba(245,166,35,0.08)", border: "0.5px solid rgba(245,166,35,0.2)",
+          borderRadius: 10, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: T.amber,
+        }}>
+          <span style={{ flexShrink: 0 }}>⚡</span>
+          <span>{insight}</span>
+        </div>
+      )}
+
+      {/* Upcoming bills */}
+      {upcomingBills.length > 0 && (
+        <Card>
+          <CardLabel>Coming up</CardLabel>
+          {upcomingBills.map((bill) => (
+            <div key={bill.name} style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "8px 0", borderBottom: `0.5px solid ${T.divider}`,
+            }}>
+              <div style={{
+                width: 34, height: 34, borderRadius: 10,
+                background: "rgba(245,166,35,0.12)", display: "flex",
+                alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0,
+              }}>
+                {getBillIcon(bill.name)}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{bill.name}</div>
+                <div style={{ fontSize: 10, color: T.muted, marginTop: 1 }}>
+                  Expected {bill.daysUntil === 0 ? "today" : `in ${bill.daysUntil} day${bill.daysUntil !== 1 ? "s" : ""}`}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{formatDollars(bill.amount)}</div>
+                <div style={{ fontSize: 10, color: bill.daysUntil <= 2 ? T.amber : T.muted, marginTop: 1 }}>
+                  {bill.daysUntil <= 2 ? "Soon" : `Jun ${bill.expectedDay}`}
+                </div>
+              </div>
+            </div>
+          ))}
+          <div style={{ height: 1 }} />
+        </Card>
+      )}
+
+      {/* Quick actions */}
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: T.muted, margin: "14px 2px 8px" }}>
+        Quick actions
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+        {quickActions.map((qa) => (
+          <button
+            key={qa.title}
+            onClick={() => onQuickAction(qa.prompt)}
+            style={{
+              background: T.card, border: T.cardBorder, borderRadius: 14,
+              padding: "12px 12px", cursor: "pointer", textAlign: "left",
+            }}
+          >
+            <div style={{ fontSize: 20, marginBottom: 5 }}>{qa.icon}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#fff" }}>{qa.title}</div>
+            <div style={{ fontSize: 10, color: T.muted, marginTop: 1 }}>{qa.desc}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Chat Tab ──────────────────────────────────────────────────────────────────
+
+const CHIPS = [
+  "How are we doing this month?",
+  "What did we spend at Costco?",
+  "Set a grocery target",
+  "Show me our recurring bills",
+  "Clear the display",
+];
+
+function ChatTab({
+  messages,
+  draft,
+  setDraft,
+  isLoading,
+  isTyping,
+  onSend,
+  onChipSend,
+  bottomRef,
+}: {
+  messages: ChatMessage[];
+  draft: string;
+  setDraft: (v: string) => void;
+  isLoading: boolean;
+  isTyping: boolean;
+  onSend: () => void;
+  onChipSend: (text: string) => void;
+  bottomRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <>
+      <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px 0", display: "flex", flexDirection: "column", gap: 10 }}>
+        {messages.map((msg) => (
+          <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: msg.isClaude ? "flex-start" : "flex-end" }}>
+            <div style={{
+              maxWidth: "88%", borderRadius: msg.isClaude ? "16px 16px 16px 4px" : "16px 16px 4px 16px",
+              padding: "10px 13px",
+              background: msg.isClaude ? T.card : T.amber,
+              border: msg.isClaude ? T.cardBorder : "none",
+              color: msg.isClaude ? T.text : "#0e1521",
+            }}>
+              {msg.isClaude ? (
+                <div className="prose prose-sm max-w-none text-[14px] leading-snug [&_p]:my-0 [&_p]:text-[#e2e8f0] [&_strong]:text-white [&_li]:text-[#e2e8f0] [&_a]:text-[#f5a623]">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                </div>
+              ) : (
+                <p style={{ fontSize: 13, lineHeight: 1.55, fontWeight: 600 }}>{msg.text}</p>
+              )}
+            </div>
+            <div style={{ fontSize: 10, color: T.muted, marginTop: 3, paddingLeft: 2 }}>
+              {msg.sender} · {formatTime(msg.timestamp)}
+            </div>
+          </div>
+        ))}
+
+        {isTyping && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+            <div style={{ background: T.card, border: T.cardBorder, borderRadius: "16px 16px 16px 4px", padding: "10px 14px" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                {[0, 150, 300].map((delay) => (
+                  <span key={delay} style={{
+                    width: 6, height: 6, borderRadius: "50%", background: T.muted,
+                    display: "inline-block", animation: "bounce 1s infinite",
+                    animationDelay: `${delay}ms`,
+                  }} />
+                ))}
+              </span>
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} style={{ height: 4 }} />
+      </div>
+
+      {/* Suggestion chips */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "8px 14px 6px" }}>
+        {CHIPS.map((chip) => (
+          <button
+            key={chip}
+            onClick={() => onChipSend(chip)}
+            disabled={isLoading}
+            style={{
+              background: T.card, border: T.cardBorder, borderRadius: 20,
+              padding: "5px 12px", fontSize: 11, color: "#94a3b8", cursor: "pointer",
+              opacity: isLoading ? 0.5 : 1,
+            }}
+          >
+            {chip}
+          </button>
+        ))}
+      </div>
+
+      {/* Input */}
+      <form
+        onSubmit={(e) => { e.preventDefault(); onSend(); }}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px 10px", borderTop: `0.5px solid ${T.divider}` }}
+      >
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onSend(); } }}
+          placeholder="Ask anything…"
+          disabled={isLoading}
+          style={{
+            flex: 1, background: T.card, border: T.cardBorder, borderRadius: 22,
+            padding: "9px 14px", fontSize: 13, color: "#fff", outline: "none",
+          }}
+        />
+        <button
+          type="submit"
+          disabled={!draft.trim() || isLoading}
+          style={{
+            width: 36, height: 36, background: T.amber, border: "none",
+            borderRadius: "50%", display: "flex", alignItems: "center",
+            justifyContent: "center", cursor: "pointer", flexShrink: 0,
+            opacity: !draft.trim() || isLoading ? 0.4 : 1, color: "#0e1521",
+          }}
+        >
+          <SendIcon />
+        </button>
+      </form>
+
+      <style>{`@keyframes bounce { 0%,80%,100% { transform:translateY(0) } 40% { transform:translateY(-5px) } }`}</style>
+    </>
+  );
+}
+
+// ── Budget Tab ────────────────────────────────────────────────────────────────
+
+function BudgetTab({
+  budgetLoading,
+  plaidConnected,
+  plaidConnecting,
+  transactions,
+  categories,
+  totalSpent,
+  onConnectChase,
+}: {
+  budgetLoading: boolean;
+  plaidConnected: boolean;
+  plaidConnecting: boolean;
+  transactions: PlaidTx[];
+  categories: CategoryRow[];
+  totalSpent: number;
+  onConnectChase: () => void;
+}) {
+  const now = new Date();
+  const daysLeft = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate();
+  const monthLabel = now.toLocaleDateString("en-US", { month: "long" });
+  const totalPercent = Math.round((totalSpent / MONTH_BUDGET) * 100);
+
+  if (budgetLoading) {
+    return (
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <p style={{ fontSize: 13, color: T.muted }}>Loading…</p>
+      </div>
+    );
+  }
+
+  if (!plaidConnected) {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: "0 32px", textAlign: "center" }}>
+        <p style={{ fontSize: 13, color: T.text }}>Connect your Chase account to see real spending data.</p>
+        <button
+          onClick={onConnectChase}
+          disabled={plaidConnecting}
+          style={{ background: T.amber, color: "#0e1521", border: "none", borderRadius: 22, padding: "11px 28px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: plaidConnecting ? 0.6 : 1 }}
+        >
+          {plaidConnecting ? "Connecting…" : "Connect Chase"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "0 14px 100px" }}>
+      {/* Header */}
+      <div style={{ padding: "14px 2px 10px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.3px", color: "#fff" }}>{monthLabel}</div>
+          <div style={{ fontSize: 11, color: T.muted }}>{daysLeft} days left</div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 4 }}>
+          <div style={{ fontSize: 32, fontWeight: 700, letterSpacing: "-0.5px", color: "#fff" }}>{formatDollars(totalSpent)}</div>
+          <div style={{ fontSize: 13, color: T.muted }}>of {formatDollars(MONTH_BUDGET)}</div>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <ProgressBar pct={totalPercent} color={totalPercent >= 90 ? "#ef4444" : totalPercent >= 75 ? T.warn : T.amber} />
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 11, color: T.muted }}>
+            <span>{totalPercent}%</span>
+            <span>{formatDollars(Math.max(0, MONTH_BUDGET - totalSpent))} remaining</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Categories */}
+      {categories.length === 0 ? (
+        <p style={{ textAlign: "center", fontSize: 13, color: T.muted, padding: "32px 0" }}>No transactions this month yet.</p>
+      ) : (
+        <div style={{ background: T.card, border: T.cardBorder, borderRadius: 16, overflow: "hidden" }}>
+          {categories.map((cat, i) => {
+            const pct = cat.target ? Math.round((cat.spent / cat.target) * 100) : null;
+            return (
+              <div key={cat.name} style={{ padding: "12px 16px", borderBottom: i < categories.length - 1 ? `0.5px solid ${T.divider}` : "none" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 5 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{cat.name}</span>
+                  <span style={{ fontSize: 12, color: T.text }}>
+                    {formatDollars(cat.spent)}
+                    {cat.target ? <span style={{ color: T.muted }}> / {formatDollars(cat.target)}</span> : null}
+                  </span>
+                </div>
+                {cat.target !== null && (
+                  <>
+                    <ProgressBar pct={pct ?? 0} color={catBarColor(pct)} />
+                    <div style={{ textAlign: "right", fontSize: 10, color: T.muted, marginTop: 3 }}>{pct}%</div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Bottom Nav ────────────────────────────────────────────────────────────────
+
+function BottomNav({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
+  const items: { id: Tab; label: string; icon: string }[] = [
+    { id: "home", label: "Home", icon: "⌂" },
+    { id: "chat", label: "Chat", icon: "◎" },
+    { id: "budget", label: "Budget", icon: "▦" },
+  ];
+  return (
+    <nav
+      style={{
+        display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
+        borderTop: `0.5px solid ${T.divider}`, background: T.bg,
+        paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))", paddingTop: 8,
+        flexShrink: 0,
+      }}
+      role="tablist"
+    >
+      {items.map((item) => (
+        <button
+          key={item.id}
+          role="tab"
+          aria-selected={tab === item.id}
+          onClick={() => setTab(item.id)}
+          style={{
+            display: "flex", flexDirection: "column", alignItems: "center",
+            gap: 3, fontSize: 10, background: "none", border: "none",
+            color: tab === item.id ? T.amber : T.muted,
+            fontWeight: tab === item.id ? 700 : 400,
+            cursor: "pointer", padding: "6px 0", position: "relative",
+          }}
+        >
+          <span style={{ fontSize: 18, lineHeight: 1 }}>{item.icon}</span>
+          <span>{item.label}</span>
+          {tab === item.id && (
+            <span style={{ position: "absolute", bottom: 0, left: "25%", right: "25%", height: 3, borderRadius: 2, background: T.amber }} />
+          )}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
 
 type CommandCenterProps = {
   userEmail: string;
@@ -213,37 +691,33 @@ type CommandCenterProps = {
 };
 
 export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) {
-  const [tab, setTab] = useState<Tab>("chat");
+  const [tab, setTab] = useState<Tab>("home");
 
-  // ── Chat state ──────────────────────────────────────────────────────────────
+  // Chat state
   const initialMessages = useMemo(() => getInitialMessages(userEmail), [userEmail]);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [draft, setDraft] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // ── Budget state ─────────────────────────────────────────────────────────────
+  // Budget / Plaid state
   const [budgetLoading, setBudgetLoading] = useState(true);
   const [plaidConnected, setPlaidConnected] = useState(false);
   const [plaidConnecting, setPlaidConnecting] = useState(false);
-  const [transactions, setTransactions] = useState<PlaidTransaction[]>([]);
+  const [transactions, setTransactions] = useState<PlaidTx[]>([]);
   const [targets, setTargets] = useState<Record<string, number>>({});
   const [linkToken, setLinkToken] = useState<string | null>(null);
 
   const loadBudgetData = useCallback(async () => {
     setBudgetLoading(true);
     try {
-      const [txRes, memoriesRes] = await Promise.all([
+      const [txRes, memRes] = await Promise.all([
         fetch("/api/plaid/transactions"),
         fetch("/api/memories"),
       ]);
-
       if (txRes.ok) {
-        const txData = (await txRes.json()) as {
-          connected: boolean;
-          transactions?: PlaidTransaction[];
-        };
+        const txData = await txRes.json() as { connected: boolean; transactions?: PlaidTx[] };
         if (txData.connected && txData.transactions) {
           setPlaidConnected(true);
           setTransactions(txData.transactions);
@@ -251,11 +725,8 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
           setPlaidConnected(false);
         }
       }
-
-      if (memoriesRes.ok) {
-        const { memories } = (await memoriesRes.json()) as {
-          memories: Record<string, string>;
-        };
+      if (memRes.ok) {
+        const { memories } = await memRes.json() as { memories: Record<string, string> };
         setTargets(parseTargets(memories));
       }
     } catch {
@@ -272,10 +743,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
         const res = await fetch("/api/plaid/exchange-token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            public_token,
-            institution_name: metadata.institution?.name,
-          }),
+          body: JSON.stringify({ public_token, institution_name: metadata.institution?.name }),
         });
         if (res.ok) await loadBudgetData();
       } finally {
@@ -283,68 +751,56 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
         setLinkToken(null);
       }
     },
-    onExit: () => {
-      setPlaidConnecting(false);
-      setLinkToken(null);
-    },
+    onExit: () => { setPlaidConnecting(false); setLinkToken(null); },
   });
 
-  useEffect(() => {
-    void loadBudgetData();
-  }, [loadBudgetData]);
-
-  useEffect(() => {
-    if (linkToken && ready) open();
-  }, [linkToken, ready, open]);
+  useEffect(() => { void loadBudgetData(); }, [loadBudgetData]);
+  useEffect(() => { if (linkToken && ready) open(); }, [linkToken, ready, open]);
 
   const connectChase = async () => {
     setPlaidConnecting(true);
     try {
       const res = await fetch("/api/plaid/create-link-token", { method: "POST" });
       if (!res.ok) { setPlaidConnecting(false); return; }
-      const { link_token } = (await res.json()) as { link_token: string };
+      const { link_token } = await res.json() as { link_token: string };
       setLinkToken(link_token);
     } catch {
       setPlaidConnecting(false);
     }
   };
 
-  // ── Derived budget metrics ────────────────────────────────────────────────
-  const { monthLabel, daysLeft, totalSpent, categories } = useMemo(() => {
+  // Derived
+  const { categories, totalSpent } = useMemo(() => {
+    const cats = buildCategories(transactions, targets);
     const now = new Date();
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    return {
-      monthLabel: now.toLocaleDateString("en-US", { month: "long" }),
-      daysLeft: Math.max(0, lastDay - now.getDate()),
-      totalSpent: transactions
-        .filter((t) => {
-          if (t.amount <= 0) return false;
-          const d = new Date(`${t.date}T12:00:00`);
-          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-        })
-        .reduce((s, t) => s + t.amount, 0),
-      categories: buildCategories(transactions, targets),
-    };
+    const spent = transactions
+      .filter((t) => {
+        if (t.amount <= 0) return false;
+        const d = new Date(`${t.date}T12:00:00`);
+        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+      })
+      .reduce((s, t) => s + t.amount, 0);
+    return { categories: cats, totalSpent: spent };
   }, [transactions, targets]);
 
-  const totalPercent = Math.round((totalSpent / MONTH_BUDGET) * 100);
+  const upcomingBills = useMemo(() => detectUpcomingBills(transactions), [transactions]);
 
-  // ── Chat helpers ──────────────────────────────────────────────────────────
+  // Chat helpers
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     });
   };
 
-  const sendMessage = async () => {
-    const text = draft.trim();
-    if (!text || isLoading) return;
+  const sendMessage = async (text?: string) => {
+    const msgText = (text ?? draft).trim();
+    if (!msgText || isLoading) return;
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       sender: userEmail,
       isClaude: false,
-      text,
+      text: msgText,
       timestamp: new Date(),
     };
 
@@ -356,7 +812,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     scrollToBottom();
 
     const assistantId = crypto.randomUUID();
-    let assistantStarted = false;
+    let started = false;
     let assistantText = "";
 
     try {
@@ -365,10 +821,10 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: toApiMessages(nextMessages), userEmail }),
       });
-      if (!res.ok) throw new Error("Chat request failed");
+      if (!res.ok) throw new Error("Chat failed");
 
       const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response stream");
+      if (!reader) throw new Error("No stream");
 
       const decoder = new TextDecoder();
       let buffer = "";
@@ -382,25 +838,16 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-          const payload = JSON.parse(line.slice(6)) as {
-            type: string;
-            text?: string;
-            message?: string;
-          };
+          const payload = JSON.parse(line.slice(6)) as { type: string; text?: string; message?: string };
           if (payload.type === "text" && payload.text) {
-            if (!assistantStarted) {
-              assistantStarted = true;
+            if (!started) {
+              started = true;
               setIsTyping(false);
               assistantText = payload.text;
-              setMessages((prev) => [
-                ...prev,
-                { id: assistantId, sender: "Claude", isClaude: true, text: assistantText, timestamp: new Date() },
-              ]);
+              setMessages((prev) => [...prev, { id: assistantId, sender: "Claude", isClaude: true, text: assistantText, timestamp: new Date() }]);
             } else {
               assistantText += payload.text;
-              setMessages((prev) =>
-                prev.map((m) => m.id === assistantId ? { ...m, text: assistantText } : m),
-              );
+              setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, text: assistantText } : m));
             }
             scrollToBottom();
           } else if (payload.type === "error") {
@@ -409,11 +856,8 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
         }
       }
     } catch {
-      if (!assistantStarted) {
-        setMessages((prev) => [
-          ...prev,
-          { id: assistantId, sender: "Claude", isClaude: true, text: "Sorry, something went wrong. Try again.", timestamp: new Date() },
-        ]);
+      if (!started) {
+        setMessages((prev) => [...prev, { id: assistantId, sender: "Claude", isClaude: true, text: "Something went wrong. Try again.", timestamp: new Date() }]);
       }
     } finally {
       setIsLoading(false);
@@ -422,260 +866,83 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     }
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // Quick action from home tab: navigate to chat and send or pre-fill
+  const handleQuickAction = (prompt: string) => {
+    setTab("chat");
+    // If prompt ends with space/colon it needs completion, else send immediately
+    if (prompt.endsWith(" ") || prompt.endsWith(": ")) {
+      setDraft(prompt);
+    } else {
+      void sendMessage(prompt);
+    }
+  };
+
   return (
-    <div className={`flex h-dvh flex-col ${BG} text-zinc-900`}>
-      <div className="flex min-h-0 flex-1 flex-col">
+    <div style={{ display: "flex", height: "100dvh", flexDirection: "column", background: T.bg, color: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+      {/* Header — only shown on chat and budget */}
+      {tab !== "home" && (
+        <header style={{ flexShrink: 0, padding: "max(0.75rem, env(safe-area-inset-top)) 16px 12px", borderBottom: `0.5px solid ${T.divider}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h1 style={{ fontSize: 18, fontWeight: 700 }}>{tab === "chat" ? "Chat" : "Budget"}</h1>
+          <form action={signOutAction}>
+            <button type="submit" style={{ fontSize: 12, color: T.muted, background: "none", border: "none", cursor: "pointer" }}>
+              Sign out
+            </button>
+          </form>
+        </header>
+      )}
 
-        {/* ── Chat tab ─────────────────────────────────────────────────────── */}
-        {tab === "chat" ? (
-          <>
-            <header
-              className={`shrink-0 ${BORDER} border-x-0 border-t-0 bg-[#f8f7f4] px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h1 className="text-lg font-semibold tracking-tight">Command center</h1>
-                  <p className="mt-0.5 truncate text-xs text-zinc-500">{userEmail}</p>
-                </div>
-                <form action={signOutAction}>
-                  <button
-                    type="submit"
-                    className="shrink-0 text-xs text-zinc-500 underline-offset-2 hover:text-zinc-800 hover:underline"
-                  >
-                    Sign out
-                  </button>
-                </form>
-              </div>
-              <div className={`mt-3 flex items-center gap-2 rounded-lg ${BORDER} bg-white/60 px-3 py-2`}>
-                <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden />
-                <span className="text-xs text-zinc-600">
-                  Display: <span className="font-medium text-zinc-800">Idle</span>
-                </span>
-              </div>
-            </header>
+      {/* Home header — minimal */}
+      {tab === "home" && (
+        <div style={{ flexShrink: 0, display: "flex", justifyContent: "flex-end", padding: "max(0.75rem, env(safe-area-inset-top)) 16px 0" }}>
+          <form action={signOutAction}>
+            <button type="submit" style={{ fontSize: 12, color: T.muted, background: "none", border: "none", cursor: "pointer" }}>
+              Sign out
+            </button>
+          </form>
+        </div>
+      )}
 
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
-              <ul className="flex flex-col gap-4">
-                {messages.map((message) => (
-                  <li
-                    key={message.id}
-                    className={`flex flex-col ${message.isClaude ? "items-start" : "items-end"}`}
-                  >
-                    <div
-                      className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 ${
-                        message.isClaude
-                          ? "rounded-bl-sm bg-zinc-200/80"
-                          : "rounded-br-sm bg-sky-100"
-                      }`}
-                    >
-                      {message.isClaude ? (
-                        <div className="prose prose-sm prose-zinc max-w-none text-[15px] leading-snug [&_p]:my-0 [&_table]:text-sm [&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
-                        </div>
-                      ) : (
-                        <p className="whitespace-pre-wrap text-[15px] leading-snug text-zinc-900">
-                          {message.text}
-                        </p>
-                      )}
-                    </div>
-                    <p className="mt-1 px-0.5 text-[11px] text-zinc-500">
-                      {message.sender} · {formatTime(message.timestamp)}
-                    </p>
-                  </li>
-                ))}
-                {isTyping && (
-                  <li className="flex flex-col items-start">
-                    <div className="rounded-2xl rounded-bl-sm bg-zinc-200/80 px-4 py-3">
-                      <span className="flex items-center gap-1" aria-label="Claude is typing">
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-500 [animation-delay:0ms]" />
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-500 [animation-delay:150ms]" />
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-500 [animation-delay:300ms]" />
-                      </span>
-                    </div>
-                  </li>
-                )}
-              </ul>
-              <div ref={bottomRef} className="h-1" aria-hidden />
-            </div>
-
-            <form
-              onSubmit={(e) => { e.preventDefault(); void sendMessage(); }}
-              className={`shrink-0 ${BORDER} border-x-0 border-b-0 bg-[#f8f7f4] px-3 py-3`}
-            >
-              <div className="flex items-center gap-2">
-                <label htmlFor="message" className="sr-only">Message</label>
-                <input
-                  id="message"
-                  type="text"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") { e.preventDefault(); void sendMessage(); }
-                  }}
-                  placeholder="How can I help?"
-                  disabled={isLoading}
-                  className={`h-11 min-w-0 flex-1 rounded-full ${BORDER} bg-white px-4 text-[15px] text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-300 disabled:opacity-50`}
-                />
-                <button
-                  type="submit"
-                  disabled={!draft.trim() || isLoading}
-                  aria-label="Send message"
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white disabled:opacity-35"
-                >
-                  <SendIcon />
-                </button>
-              </div>
-            </form>
-          </>
-        ) : (
-
-        /* ── Budget tab ────────────────────────────────────────────────────── */
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            {budgetLoading ? (
-              <div className="flex h-full items-center justify-center">
-                <p className="text-sm text-zinc-400">Loading…</p>
-              </div>
-            ) : !plaidConnected ? (
-              <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
-                <p className="text-sm text-zinc-600">
-                  Connect your Chase account to see real spending data.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void connectChase()}
-                  disabled={plaidConnecting}
-                  className="rounded-full bg-zinc-900 px-6 py-2.5 text-sm font-medium text-white disabled:opacity-50"
-                >
-                  {plaidConnecting ? "Connecting…" : "Connect Chase"}
-                </button>
-              </div>
-            ) : (
-              <>
-                {/* Header */}
-                <header
-                  className={`${BORDER} border-x-0 border-t-0 bg-[#f8f7f4] px-4 pb-4 pt-[max(0.75rem,env(safe-area-inset-top))]`}
-                >
-                  <div className="flex items-baseline justify-between">
-                    <h1 className="text-lg font-semibold tracking-tight">
-                      {monthLabel}
-                    </h1>
-                    <span className="text-xs text-zinc-500">
-                      {daysLeft} {daysLeft === 1 ? "day" : "days"} left
-                    </span>
-                  </div>
-                  <div className="mt-2 flex items-baseline justify-between">
-                    <span className="text-2xl font-semibold tabular-nums">
-                      {formatDollars(totalSpent)}
-                    </span>
-                    <span className="text-sm text-zinc-500">
-                      of {formatDollars(MONTH_BUDGET)}
-                    </span>
-                  </div>
-                  {/* Overall progress bar */}
-                  <div className={`mt-2 h-2 overflow-hidden rounded-full ${barBg(totalPercent)} ${BORDER}`}>
-                    <div
-                      className={`h-full rounded-full transition-all ${barColor(totalPercent)}`}
-                      style={{ width: `${Math.min(totalPercent, 100)}%` }}
-                    />
-                  </div>
-                  <p className="mt-1 text-right text-xs tabular-nums text-zinc-500">
-                    {formatDollars(Math.max(0, MONTH_BUDGET - totalSpent))} remaining · {totalPercent}%
-                  </p>
-                </header>
-
-                {/* Category rows */}
-                <div className="px-4 pb-6 pt-3">
-                  {categories.length === 0 ? (
-                    <p className="py-8 text-center text-sm text-zinc-400">
-                      No transactions this month yet.
-                    </p>
-                  ) : (
-                    <ul className={`divide-y divide-zinc-100 rounded-xl ${BORDER} bg-white`}>
-                      {categories.map((cat) => {
-                        const hasTarget = cat.target !== null;
-                        const percent = hasTarget
-                          ? Math.round((cat.spent / cat.target!) * 100)
-                          : null;
-                        return (
-                          <li key={cat.name} className="px-4 py-3">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="truncate text-sm font-medium text-zinc-800">
-                                {cat.name}
-                              </span>
-                              <span className="shrink-0 tabular-nums text-sm text-zinc-700">
-                                {formatDollars(cat.spent)}
-                                {hasTarget && (
-                                  <span className="ml-1 text-xs text-zinc-400">
-                                    / {formatDollars(cat.target!)}
-                                  </span>
-                                )}
-                              </span>
-                            </div>
-                            {hasTarget && percent !== null && (
-                              <>
-                                <div className={`mt-1.5 h-1.5 overflow-hidden rounded-full ${barBg(percent)} ${BORDER}`}>
-                                  <div
-                                    className={`h-full rounded-full ${barColor(percent)}`}
-                                    style={{ width: `${Math.min(percent, 100)}%` }}
-                                  />
-                                </div>
-                                <p className="mt-0.5 text-right text-[11px] tabular-nums text-zinc-400">
-                                  {percent}%
-                                </p>
-                              </>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
+      {/* Content */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflowY: tab === "chat" ? "hidden" : "visible" }}>
+        {tab === "home" && (
+          <HomeTab
+            userEmail={userEmail}
+            transactions={transactions}
+            targets={targets}
+            budgetLoading={budgetLoading}
+            plaidConnected={plaidConnected}
+            categories={categories}
+            totalSpent={totalSpent}
+            upcomingBills={upcomingBills}
+            onQuickAction={handleQuickAction}
+          />
+        )}
+        {tab === "chat" && (
+          <ChatTab
+            messages={messages}
+            draft={draft}
+            setDraft={setDraft}
+            isLoading={isLoading}
+            isTyping={isTyping}
+            onSend={() => void sendMessage()}
+            onChipSend={(text) => void sendMessage(text)}
+            bottomRef={bottomRef}
+          />
+        )}
+        {tab === "budget" && (
+          <BudgetTab
+            budgetLoading={budgetLoading}
+            plaidConnected={plaidConnected}
+            plaidConnecting={plaidConnecting}
+            transactions={transactions}
+            categories={categories}
+            totalSpent={totalSpent}
+            onConnectChase={() => void connectChase()}
+          />
         )}
       </div>
 
-      {/* ── Bottom nav ──────────────────────────────────────────────────────── */}
-      <nav
-        className={`shrink-0 ${BORDER} border-x-0 border-b-0 bg-[#f8f7f4] pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1`}
-        role="tablist"
-        aria-label="Main navigation"
-      >
-        <div className="grid grid-cols-2">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "chat"}
-            onClick={() => setTab("chat")}
-            className={`relative flex flex-col items-center gap-1 py-2 text-xs ${
-              tab === "chat" ? "font-semibold text-zinc-900" : "text-zinc-500"
-            }`}
-          >
-            <MessageIcon />
-            Chat
-            {tab === "chat" && (
-              <span className="absolute bottom-0 left-1/4 right-1/4 h-0.5 rounded-full bg-zinc-900" />
-            )}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "budget"}
-            onClick={() => setTab("budget")}
-            className={`relative flex flex-col items-center gap-1 py-2 text-xs ${
-              tab === "budget" ? "font-semibold text-zinc-900" : "text-zinc-500"
-            }`}
-          >
-            <ChartIcon />
-            Budget
-            {tab === "budget" && (
-              <span className="absolute bottom-0 left-1/4 right-1/4 h-0.5 rounded-full bg-zinc-900" />
-            )}
-          </button>
-        </div>
-      </nav>
+      <BottomNav tab={tab} setTab={setTab} />
     </div>
   );
 }
