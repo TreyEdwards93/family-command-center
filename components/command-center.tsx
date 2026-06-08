@@ -909,7 +909,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     const now = new Date();
     const spent = transactions
       .filter((t) => {
-        if (t.amount <= 0) return false;
+        if (t.amount === 0) return false;
         const d = new Date(`${t.date}T12:00:00`);
         return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
       })
