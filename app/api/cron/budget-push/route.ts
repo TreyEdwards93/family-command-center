@@ -108,7 +108,7 @@ export async function GET(request: Request) {
   const spendMap = new Map<string, number>();
   let totalSpent = 0;
   for (const t of allTx) {
-    if (t.amount <= 0) continue;
+    if (t.amount === 0) continue;
     totalSpent += t.amount;
     const cat = t.personal_finance_category?.primary ?? t.category?.[0] ?? "Other";
     spendMap.set(cat, (spendMap.get(cat) ?? 0) + t.amount);

@@ -104,7 +104,7 @@ function buildCategories(transactions: PlaidTx[], targets: Record<string, number
   const spendMap = new Map<string, number>();
 
   for (const t of transactions) {
-    if (t.amount <= 0) continue;
+    if (t.amount === 0) continue;
     const d = new Date(`${t.date}T12:00:00`);
     if (d.getMonth() !== month || d.getFullYear() !== year) continue;
     const cat =

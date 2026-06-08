@@ -146,7 +146,7 @@ function groupByCategory(
   const map = new Map<string, CategorySummary>();
 
   for (const t of transactions) {
-    if (t.amount <= 0) continue;
+    if (t.amount === 0) continue;
     const cat = t.personal_finance_category?.primary ?? t.category?.[0] ?? "Other";
     if (!map.has(cat)) map.set(cat, { name: cat, total: 0, transactions: [] });
     const entry = map.get(cat)!;
