@@ -267,6 +267,7 @@ export async function GET(request: Request) {
     current_month_points: currentMonthPoints,
     prev_month_points: prevMonthPoints,
     chart_max: chartMax,
+    today_x: Math.round((daysElapsed / 30) * CHART_W),
   };
 
   top4.forEach((cat, i) => {
