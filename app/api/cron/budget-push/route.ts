@@ -52,6 +52,24 @@ function normalizeKey(s: string): string {
   return s.toLowerCase().replace(/_/g, " ");
 }
 
+function fmtDollars(n: number): string {
+  return "$" + Math.round(n).toLocaleString("en-US");
+}
+
+const CHART_W = 260;
+const CHART_H = 130;
+
+function toPolylinePoints(series: number[], max: number): string {
+  if (series.length < 2) return "";
+  return series
+    .map((val, i) => {
+      const x = Math.round((i / 30) * CHART_W);
+      const y = Math.round(CHART_H - (val / max) * CHART_H * 0.9);
+      return `${x},${y}`;
+    })
+    .join(" ");
+}
+
 export async function GET(request: Request) {
   // Verify Vercel cron secret
   const auth = request.headers.get("authorization") ?? "";
@@ -104,6 +122,29 @@ export async function GET(request: Request) {
     offset = allTx.length;
   }
 
+  // Fetch previous month transactions through the same day-of-month
+  const prevMonthNum = month === 0 ? 11 : month - 1;
+  const prevMonthYear = month === 0 ? year - 1 : year;
+  const prevStartDate = new Date(prevMonthYear, prevMonthNum, 1).toISOString().split("T")[0];
+  const prevEndDate = new Date(prevMonthYear, prevMonthNum, daysElapsed).toISOString().split("T")[0];
+  const prevMonthLabel = new Date(prevMonthYear, prevMonthNum, 1).toLocaleString("en-US", { month: "long" });
+
+  const prevTx: Awaited<
+    ReturnType<typeof plaidClient.transactionsGet>
+  >["data"]["transactions"] = [];
+  let prevOffset = 0;
+  while (true) {
+    const res = await plaidClient.transactionsGet({
+      access_token: connection.access_token,
+      start_date: prevStartDate,
+      end_date: prevEndDate,
+      options: { count: 500, offset: prevOffset, include_personal_finance_category: true },
+    });
+    prevTx.push(...res.data.transactions);
+    if (prevTx.length >= res.data.total_transactions) break;
+    prevOffset = prevTx.length;
+  }
+
   // Sum by category (positive amounts = spending)
   const spendMap = new Map<string, number>();
   let totalSpent = 0;
@@ -114,6 +155,34 @@ export async function GET(request: Request) {
     spendMap.set(cat, (spendMap.get(cat) ?? 0) + t.amount);
   }
   totalSpent = Math.round(totalSpent);
+
+  // Build daily cumulative series for chart
+  const curDailySpend = new Array(32).fill(0) as number[];
+  for (const t of allTx) {
+    if (t.amount === 0) continue;
+    const d = new Date(`${t.date}T12:00:00`);
+    curDailySpend[d.getDate()] += t.amount;
+  }
+  const prevDailySpend = new Array(32).fill(0) as number[];
+  for (const t of prevTx) {
+    if (t.amount === 0) continue;
+    const d = new Date(`${t.date}T12:00:00`);
+    prevDailySpend[d.getDate()] += t.amount;
+  }
+  const curCumul: number[] = [];
+  const prevCumul: number[] = [];
+  let cSum = 0;
+  let pSum = 0;
+  for (let day = 1; day <= daysElapsed; day++) {
+    cSum += curDailySpend[day];
+    curCumul.push(cSum);
+    pSum += prevDailySpend[day];
+    prevCumul.push(pSum);
+  }
+  const prevTotalToDate = Math.round(pSum);
+  const chartMax = Math.max(...curCumul, ...prevCumul, 1);
+  const currentMonthPoints = toPolylinePoints(curCumul, chartMax);
+  const prevMonthPoints = toPolylinePoints(prevCumul, chartMax);
 
   // Read budget targets from memories
   const { data: memoriesRows } = await supabase
@@ -186,6 +255,18 @@ export async function GET(request: Request) {
     monthly_pace: monthlyPace,
     on_pace: onPace,
     show_projection: showProjection,
+    // Pre-formatted display strings
+    total_spent_display: fmtDollars(totalSpent),
+    total_budget_display: fmtDollars(MONTH_BUDGET),
+    remaining_display: fmtDollars(Math.max(0, MONTH_BUDGET - totalSpent)),
+    monthly_pace_display: showProjection ? fmtDollars(monthlyPace) : fmtDollars(totalSpent),
+    // Chart data
+    prev_month_label: prevMonthLabel,
+    prev_month_total_to_date: prevTotalToDate,
+    prev_month_total_to_date_display: fmtDollars(prevTotalToDate),
+    current_month_points: currentMonthPoints,
+    prev_month_points: prevMonthPoints,
+    chart_max: chartMax,
   };
 
   top4.forEach((cat, i) => {
@@ -218,6 +299,6 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    pushed: { month: monthName, total_spent: totalSpent, percent_used: percentUsed, on_pace: onPace },
+    pushed: { month: monthName, total_spent: totalSpent, percent_used: percentUsed, on_pace: onPace, prev_month_label: prevMonthLabel, prev_month_total_to_date: prevTotalToDate },
   });
 }

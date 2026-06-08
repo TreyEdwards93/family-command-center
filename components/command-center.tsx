@@ -236,6 +236,137 @@ function catBarColor(pct: number | null): string {
   return T.green;
 }
 
+// ── Spend Chart ───────────────────────────────────────────────────────────────
+
+function SpendChart({ transactions }: { transactions: PlaidTx[] }) {
+  const data = useMemo(() => {
+    const now = new Date();
+    const curMonth = now.getMonth();
+    const curYear = now.getFullYear();
+    const prevMonth = curMonth === 0 ? 11 : curMonth - 1;
+    const prevYear = curMonth === 0 ? curYear - 1 : curYear;
+    const today = now.getDate();
+
+    const curDaily = new Array(32).fill(0) as number[];
+    const prevDaily = new Array(32).fill(0) as number[];
+
+    for (const t of transactions) {
+      if (t.amount === 0) continue;
+      const d = new Date(`${t.date}T12:00:00`);
+      if (d.getMonth() === curMonth && d.getFullYear() === curYear) {
+        curDaily[d.getDate()] += t.amount;
+      } else if (d.getMonth() === prevMonth && d.getFullYear() === prevYear) {
+        prevDaily[d.getDate()] += t.amount;
+      }
+    }
+
+    const curCumul: number[] = [];
+    const prevCumul: number[] = [];
+    let cs = 0;
+    let ps = 0;
+    for (let day = 1; day <= today; day++) {
+      cs += curDaily[day];
+      curCumul.push(cs);
+      ps += prevDaily[day];
+      prevCumul.push(ps);
+    }
+
+    const chartMax = Math.max(...curCumul, ...prevCumul, 100);
+    const curMonthLabel = now.toLocaleString("en-US", { month: "long" });
+    const prevMonthLabel = new Date(prevYear, prevMonth, 1).toLocaleString("en-US", { month: "long" });
+
+    return { curCumul, prevCumul, chartMax, today, curMonthLabel, prevMonthLabel, curTotal: cs, prevTotal: ps };
+  }, [transactions]);
+
+  const W = 340;
+  const H = 130;
+  const padTop = 8;
+  const padBot = 22;
+  const chartH = H - padTop - padBot;
+
+  const toPoints = (series: number[]) =>
+    series
+      .map((val, i) => {
+        const x = (i / 30) * W;
+        const y = padTop + chartH - (val / data.chartMax) * chartH;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
+
+  const todayX = ((data.today - 1) / 30) * W;
+  const xAxisDays = [1, 8, 15, 22, 31];
+
+  if (data.curCumul.length < 2 && data.prevCumul.length < 2) return null;
+
+  return (
+    <Card style={{ marginBottom: 12, padding: "14px 16px 10px" }}>
+      <CardLabel>Cumulative spend</CardLabel>
+      <svg
+        width="100%"
+        height={H}
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        style={{ display: "block", overflow: "visible" }}
+      >
+        {/* Today marker */}
+        <line
+          x1={todayX} y1={padTop}
+          x2={todayX} y2={padTop + chartH}
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth="1"
+          strokeDasharray="3,3"
+        />
+        {/* Prev month line */}
+        {data.prevCumul.length >= 2 && (
+          <polyline
+            points={toPoints(data.prevCumul)}
+            fill="none"
+            stroke="rgba(255,255,255,0.22)"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        )}
+        {/* Current month line */}
+        {data.curCumul.length >= 2 && (
+          <polyline
+            points={toPoints(data.curCumul)}
+            fill="none"
+            stroke="#f5a623"
+            strokeWidth="2"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        )}
+        {/* X-axis day labels */}
+        {xAxisDays.map((day) => (
+          <text
+            key={day}
+            x={((day - 1) / 30) * W}
+            y={H - 4}
+            fill="#6b7a99"
+            fontSize="9"
+            textAnchor={day === 1 ? "start" : day === 31 ? "end" : "middle"}
+          >
+            {day}
+          </text>
+        ))}
+      </svg>
+      {/* Legend */}
+      <div style={{ display: "flex", gap: 16, marginTop: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
+          <span style={{ color: "#f5a623", lineHeight: 1 }}>●</span>
+          <span style={{ color: T.text }}>{data.curMonthLabel} {formatDollars(data.curTotal)}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
+          <span style={{ color: "rgba(255,255,255,0.3)", lineHeight: 1 }}>●</span>
+          <span style={{ color: T.muted }}>{data.prevMonthLabel} {formatDollars(data.prevTotal)}</span>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 // ── Home Tab ──────────────────────────────────────────────────────────────────
 
 function HomeTab({
@@ -608,6 +739,9 @@ function BudgetTab({
           </div>
         </div>
       </div>
+
+      {/* Cumulative spend chart */}
+      <SpendChart transactions={transactions} />
 
       {/* Categories */}
       {categories.length === 0 ? (
