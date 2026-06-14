@@ -53,6 +53,8 @@ const T = {
 
 const MONTH_BUDGET = 6000;
 
+const EXCLUDED_CATS = new Set(["LOAN_DISBURSEMENTS", "INCOME", "TRANSFER_IN"]);
+
 function formatDollars(n: number) {
   return "$" + Math.round(n).toLocaleString();
 }
@@ -74,7 +76,7 @@ function getInitialMessages(userEmail: string): ChatMessage[] {
       id: "welcome",
       sender: "Claude",
       isClaude: true,
-      text: `Hey ${name} ✊🏾 — what do you need?`,
+      text: `Hey ${name} 👋🏾 — what do you need?`,
       timestamp: new Date(),
     },
   ];
@@ -105,12 +107,11 @@ function buildCategories(transactions: PlaidTx[], targets: Record<string, number
 
   for (const t of transactions) {
     if (t.amount === 0) continue;
+    const primaryCat = t.personal_finance_category?.primary ?? "";
+    if (EXCLUDED_CATS.has(primaryCat)) continue;
     const d = new Date(`${t.date}T12:00:00`);
     if (d.getMonth() !== month || d.getFullYear() !== year) continue;
-    const cat =
-      t.personal_finance_category?.primary ??
-      t.category?.[0] ??
-      "Other";
+    const cat = primaryCat || t.category?.[0] || "Other";
     spendMap.set(cat, (spendMap.get(cat) ?? 0) + t.amount);
   }
 
@@ -252,6 +253,8 @@ function SpendChart({ transactions }: { transactions: PlaidTx[] }) {
 
     for (const t of transactions) {
       if (t.amount === 0) continue;
+      const primaryCat = t.personal_finance_category?.primary ?? "";
+      if (EXCLUDED_CATS.has(primaryCat)) continue;
       const d = new Date(`${t.date}T12:00:00`);
       if (d.getMonth() === curMonth && d.getFullYear() === curYear) {
         curDaily[d.getDate()] += t.amount;
@@ -416,7 +419,7 @@ function HomeTab({
       <div style={{ padding: "12px 4px 14px" }}>
         <div style={{ fontSize: 12, color: T.muted }}>{dayLabel} · {timeLabel}</div>
         <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.5px", marginTop: 3, color: "#fff" }}>
-          Hey {name} ✊🏾
+          Hey {name} 👋🏾
         </div>
         {theoAge && (
           <div style={{
@@ -910,6 +913,8 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     const spent = transactions
       .filter((t) => {
         if (t.amount === 0) return false;
+        const primaryCat = t.personal_finance_category?.primary ?? "";
+        if (EXCLUDED_CATS.has(primaryCat)) return false;
         const d = new Date(`${t.date}T12:00:00`);
         return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
       })

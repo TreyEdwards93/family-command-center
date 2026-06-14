@@ -4,6 +4,13 @@ import { getTheoAgeLabel } from "@/lib/theo";
 import { createClient } from "@/lib/supabase/server";
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam, Tool } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
+import {
+  calculatePendingRoundups,
+  computeSplitAmounts,
+  parseSplit,
+  MIN_RUN_USD,
+} from "@/lib/theo-fund";
+import { previewMarketBuy, PRODUCTS } from "@/lib/coinbase-trade";
 
 export const runtime = "nodejs";
 
@@ -83,6 +90,21 @@ const tools: Tool[] = [
         },
       },
       required: ["key", "value"],
+    },
+  },
+  {
+    name: "run_theo_roundup",
+    description:
+      "Calculate pending round-ups from Chase transactions for Theo's investment fund and preview the resulting Coinbase orders (40% ETH / 30% cbBTC / 30% USDC by default, configurable via the theo_portfolio_split memory). PHASE 1: preview only — never executes orders or moves money regardless of input. Always show the user the full plain-English summary: total, transaction count, date window, per-asset split, and previewed order details with fees.",
+    input_schema: {
+      type: "object",
+      properties: {
+        confirm: {
+          type: "boolean",
+          description:
+            "Reserved for Phase 2. Execution is not enabled; previews are returned regardless.",
+        },
+      },
     },
   },
 ];
@@ -362,6 +384,8 @@ Monthly budget is $6,000. Be encouraging and forward-looking. Acknowledge what i
 
 Memory: Use save_memory proactively when the user shares budget targets, recurring expenses, preferences, or any fact worth keeping. Stored memories are injected into every conversation so you always have context. When saving budget targets, always use Plaid's exact category names: Food and Drink, Shops, Travel, Recreation, Healthcare, Service, Transfer, Payment, Other. Save all targets together as a JSON object under the single key budget_targets — e.g. {"Food and Drink": 800, "Shops": 400}.
 
+Theo Fund: run_theo_roundup calculates round-ups from Chase spending (ceil minus amount per transaction) and previews crypto buys for Theo's long-term fund. It is currently preview-only and cannot move money. When Trey asks about round-ups or Theo's fund, run it and present a plain-English summary: total, number of transactions, date window, the ETH/cbBTC/USDC split in dollars, and previewed order details including fees. The portfolio split lives in the theo_portfolio_split memory as JSON like {"eth":40,"cbbtc":30,"usdc":30}; use save_memory to change it when asked.
+
 Style: Short and casual. Never use em dashes. No bullet points in responses. Make reasonable assumptions rather than asking clarifying questions. You are action-oriented.
 
 Current context:
@@ -443,6 +467,51 @@ async function executeTool(
     const { key, value } = input as { key: string; value: string };
     await saveMemory(ctx.supabase, ctx.userId, key, value);
     return { success: true, saved: { key, value } };
+  }
+
+  if (name === "run_theo_roundup") {
+    const accessToken = await getAccessToken(ctx.supabase, ctx.userId);
+    if (!accessToken) {
+      return { connected: false, message: "No Chase account connected yet." };
+    }
+
+    const memories = await loadMemories(ctx.supabase, ctx.userId);
+    const pending = await calculatePendingRoundups(
+      accessToken,
+      memories["theo_last_roundup_date"],
+    );
+
+    if (pending.total < MIN_RUN_USD) {
+      return {
+        mode: "below_minimum",
+        pending_total: pending.total,
+        minimum: MIN_RUN_USD,
+        transaction_count: pending.transaction_count,
+        window: { since: pending.window_start, through: pending.window_end },
+      };
+    }
+
+    const split = parseSplit(memories["theo_portfolio_split"]);
+    const amounts = computeSplitAmounts(pending.total, split);
+
+    const [ethPreview, btcPreview] = await Promise.all([
+      previewMarketBuy(PRODUCTS.eth, amounts.eth),
+      previewMarketBuy(PRODUCTS.cbbtc, amounts.cbbtc),
+    ]);
+
+    return {
+      mode: "preview_only",
+      note: "Phase 1: no orders were placed and no money moved.",
+      pending_total: pending.total,
+      capped: pending.capped,
+      transaction_count: pending.transaction_count,
+      window: { since: pending.window_start, through: pending.window_end },
+      split_percentages: split,
+      split_amounts: amounts,
+      usdc_note: "USDC leg is a 1:1 USD conversion on Coinbase — no order, no fee.",
+      order_previews: [ethPreview, btcPreview],
+      sample_transactions: pending.transactions.slice(0, 10),
+    };
   }
 
   throw new Error(`Unknown tool: ${name}`);

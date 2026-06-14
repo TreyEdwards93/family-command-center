@@ -6,6 +6,8 @@ export const runtime = "nodejs";
 
 const MONTH_BUDGET = 6000;
 
+const EXCLUDED_CATS = new Set(["LOAN_DISBURSEMENTS", "INCOME", "TRANSFER_IN"]);
+
 function catStatus(percent: number): "ok" | "warning" | "over" {
   if (percent >= 100) return "over";
   if (percent >= 80) return "warning";
@@ -150,8 +152,10 @@ export async function GET(request: Request) {
   let totalSpent = 0;
   for (const t of allTx) {
     if (t.amount === 0) continue;
+    const primaryCat = t.personal_finance_category?.primary ?? "";
+    if (EXCLUDED_CATS.has(primaryCat)) continue;
     totalSpent += t.amount;
-    const cat = t.personal_finance_category?.primary ?? t.category?.[0] ?? "Other";
+    const cat = primaryCat || t.category?.[0] || "Other";
     spendMap.set(cat, (spendMap.get(cat) ?? 0) + t.amount);
   }
   totalSpent = Math.round(totalSpent);
@@ -160,12 +164,16 @@ export async function GET(request: Request) {
   const curDailySpend = new Array(32).fill(0) as number[];
   for (const t of allTx) {
     if (t.amount === 0) continue;
+    const primaryCat = t.personal_finance_category?.primary ?? "";
+    if (EXCLUDED_CATS.has(primaryCat)) continue;
     const d = new Date(`${t.date}T12:00:00`);
     curDailySpend[d.getDate()] += t.amount;
   }
   const prevDailySpend = new Array(32).fill(0) as number[];
   for (const t of prevTx) {
     if (t.amount === 0) continue;
+    const primaryCat = t.personal_finance_category?.primary ?? "";
+    if (EXCLUDED_CATS.has(primaryCat)) continue;
     const d = new Date(`${t.date}T12:00:00`);
     prevDailySpend[d.getDate()] += t.amount;
   }
