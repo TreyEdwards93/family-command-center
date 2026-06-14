@@ -685,6 +685,8 @@ function BudgetTab({
   categories,
   totalSpent,
   onConnectChase,
+  refreshing,
+  onRefresh,
 }: {
   budgetLoading: boolean;
   plaidConnected: boolean;
@@ -693,6 +695,8 @@ function BudgetTab({
   categories: CategoryRow[];
   totalSpent: number;
   onConnectChase: () => void;
+  refreshing: boolean;
+  onRefresh: () => void;
 }) {
   const now = new Date();
   const daysLeft = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate();
@@ -732,7 +736,16 @@ function BudgetTab({
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 4 }}>
           <div style={{ fontSize: 32, fontWeight: 700, letterSpacing: "-0.5px", color: "#fff" }}>{formatDollars(totalSpent)}</div>
-          <div style={{ fontSize: 13, color: T.muted }}>of {formatDollars(MONTH_BUDGET)}</div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+            <div style={{ fontSize: 13, color: T.muted }}>of {formatDollars(MONTH_BUDGET)}</div>
+            <button
+              onClick={onRefresh}
+              disabled={refreshing}
+              className="text-xs text-zinc-400 hover:text-white transition-colors disabled:opacity-50"
+            >
+              {refreshing ? "Refreshing..." : "Refresh data"}
+            </button>
+          </div>
         </div>
         <div style={{ marginTop: 8 }}>
           <ProgressBar pct={totalPercent} color={totalPercent >= 90 ? "#ef4444" : totalPercent >= 75 ? T.warn : T.amber} />
@@ -839,6 +852,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   // Budget / Plaid state
+  const [refreshing, setRefreshing] = useState(false);
   const [budgetLoading, setBudgetLoading] = useState(true);
   const [plaidConnected, setPlaidConnected] = useState(false);
   const [plaidConnecting, setPlaidConnecting] = useState(false);
@@ -1005,6 +1019,15 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     }
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetch("/api/plaid/refresh", { method: "POST" });
+    setTimeout(() => {
+      void loadBudgetData();
+      setRefreshing(false);
+    }, 3000);
+  };
+
   // Quick action from home tab: navigate to chat and send or pre-fill
   const handleQuickAction = (prompt: string) => {
     setTab("chat");
@@ -1077,6 +1100,8 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             categories={categories}
             totalSpent={totalSpent}
             onConnectChase={() => void connectChase()}
+            refreshing={refreshing}
+            onRefresh={() => void handleRefresh()}
           />
         )}
       </div>
