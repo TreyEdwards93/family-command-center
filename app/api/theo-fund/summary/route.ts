@@ -20,11 +20,20 @@ export async function GET() {
     .eq("user_id", user.id)
     .eq("status", "success");
 
+  // Count failed buys so the UI can prompt a retry instead of silently
+  // hiding everything when orders didn't fill / weren't recorded as success.
+  const { count: failedCount } = await supabase
+    .from("crypto_purchases")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .eq("status", "failed");
+
   const empty = {
     total_invested: 0,
     current_value: 0,
     gain_usd: 0,
     gain_pct: 0,
+    failed_count: failedCount ?? 0,
     by_asset: {
       eth: { invested: 0, base_size: 0, current_value: 0, current_price: 0 },
       cbbtc: { invested: 0, base_size: 0, current_value: 0, current_price: 0 },
@@ -71,6 +80,7 @@ export async function GET() {
     current_value: Math.round(totalValue * 100) / 100,
     gain_usd: Math.round(gain * 100) / 100,
     gain_pct: Math.round(gainPct * 100) / 100,
+    failed_count: failedCount ?? 0,
     by_asset: {
       eth: { ...summary.eth, current_price: prices.eth },
       cbbtc: { ...summary.cbbtc, current_price: prices.cbbtc },

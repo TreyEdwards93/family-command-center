@@ -122,13 +122,31 @@ export async function previewMarketBuy(
   };
 }
 
-// Phase 2 — not called anywhere in Phase 1.
-export async function placeMarketBuy(productId: string, quoteUsd: number) {
-  return cbFetch<{
-    success: boolean;
+// Shape of POST /api/v3/brokerage/orders (Coinbase Advanced Trade). On success
+// the order_id lives under success_response, NOT at the top level. On failure
+// the details live under error_response.
+// https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/rest-api/orders/create-order
+export type PlaceOrderResponse = {
+  success: boolean;
+  success_response?: {
     order_id?: string;
-    error_response?: unknown;
-  }>("POST", "/api/v3/brokerage/orders", {
+    product_id?: string;
+    side?: string;
+    client_order_id?: string;
+  };
+  error_response?: {
+    new_order_failure_reason?: string;
+    message?: string;
+    error_details?: string;
+  };
+  order_configuration?: unknown;
+};
+
+export async function placeMarketBuy(
+  productId: string,
+  quoteUsd: number,
+): Promise<PlaceOrderResponse> {
+  return cbFetch<PlaceOrderResponse>("POST", "/api/v3/brokerage/orders", {
     body: {
       client_order_id: randomUUID(),
       product_id: productId,
@@ -136,4 +154,10 @@ export async function placeMarketBuy(productId: string, quoteUsd: number) {
       order_configuration: marketBuyConfig(quoteUsd),
     },
   });
+}
+
+// Convenience: extract the order_id from a create-order response regardless of
+// success/failure (it only exists on success).
+export function orderId(order: PlaceOrderResponse): string | null {
+  return order.success_response?.order_id ?? null;
 }

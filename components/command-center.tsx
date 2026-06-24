@@ -858,6 +858,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     current_value: number;
     gain_usd: number;
     gain_pct: number;
+    failed_count?: number;
     by_asset: {
       eth: { invested: number; base_size: number; current_value: number; current_price: number };
       cbbtc: { invested: number; base_size: number; current_value: number; current_price: number };
@@ -1236,6 +1237,11 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                         .filter(([, v]) => (v as { invested: number }).invested > 0)
                         .map(([k, v]) => `${k.toUpperCase()}: $${(v as { invested: number }).invested.toFixed(2)} invested`)
                         .join(" · ")}`}
+                  {(theoSummary.failed_count ?? 0) > 0 && (
+                    <div style={{ marginTop: 6, color: "#b45309" }}>
+                      {theoSummary.failed_count} failed buy{(theoSummary.failed_count ?? 0) > 1 ? "s" : ""} — ask the assistant to retry.
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div style={{ marginTop: 8, fontSize: 13, color: T.muted }}>No purchases yet.</div>

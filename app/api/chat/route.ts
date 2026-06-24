@@ -10,7 +10,13 @@ import {
   parseSplit,
   MIN_RUN_USD,
 } from "@/lib/theo-fund";
-import { previewMarketBuy, placeMarketBuy, getPrices, PRODUCTS } from "@/lib/coinbase-trade";
+import {
+  previewMarketBuy,
+  placeMarketBuy,
+  getPrices,
+  orderId,
+  PRODUCTS,
+} from "@/lib/coinbase-trade";
 
 export const runtime = "nodejs";
 
@@ -397,6 +403,51 @@ async function saveMemory(
   );
 }
 
+// Estimate base_size (units of crypto) when the preview didn't return one.
+// Falls back to usd_amount / price so the Theo tab can still show a current
+// value once prices are known.
+function deriveBaseSize(
+  previewBaseSize: string | null | undefined,
+  usd: number,
+  price: number | null | undefined,
+): number | null {
+  if (previewBaseSize) return Number(previewBaseSize);
+  if (price && price > 0) return Math.round((usd / price) * 1e8) / 1e8;
+  return null;
+}
+
+type PurchaseRow = {
+  user_id: string;
+  asset: "eth" | "cbbtc" | "wld";
+  usd_amount: number;
+  base_size: number | null;
+  price_at_purchase: number | null;
+  status: "success" | "failed";
+  error: string | null;
+};
+
+// Insert a crypto_purchases row, ALWAYS checking the result. Without this the
+// insert could fail silently (e.g. RLS, missing column, constraint) while the
+// user is told the buy succeeded — the exact failure mode that left the Theo
+// tab at $0.
+async function recordPurchase(
+  supabase: SupabaseClient,
+  row: PurchaseRow,
+): Promise<{ inserted: boolean; insert_error: string | null }> {
+  const { error } = await supabase.from("crypto_purchases").insert(row);
+  if (error) {
+    console.error(
+      `[theo] insert FAILED asset=${row.asset} usd=${row.usd_amount} status=${row.status}: ${error.message}`,
+      error,
+    );
+    return { inserted: false, insert_error: error.message };
+  }
+  console.log(
+    `[theo] recorded asset=${row.asset} usd=${row.usd_amount} status=${row.status} base_size=${row.base_size ?? "null"}`,
+  );
+  return { inserted: true, insert_error: null };
+}
+
 type ClientMessage = {
   role: "user" | "assistant";
   content: string;
@@ -591,54 +642,59 @@ async function executeTool(
 
     if (confirmBuy === true) {
       const supabase = ctx.supabase;
-      const results = [];
+      const legs: {
+        asset: "eth" | "cbbtc" | "wld";
+        amount: number;
+        preview: typeof ethPreview;
+        price: number | null;
+      }[] = [
+        { asset: "eth", amount: amounts.eth, preview: ethPreview, price: prices?.eth ?? null },
+        { asset: "cbbtc", amount: amounts.cbbtc, preview: btcPreview, price: prices?.cbbtc ?? null },
+        { asset: "wld", amount: amounts.wld, preview: wldPreview, price: prices?.wld ?? null },
+      ];
 
-      if (amounts.eth > 0) {
-        const order = await placeMarketBuy(PRODUCTS.eth, amounts.eth);
-        await supabase.from("crypto_purchases").insert({
+      const results: {
+        asset: "eth" | "cbbtc" | "wld";
+        success: boolean;
+        order_id: string | null;
+        error: unknown;
+        recorded: boolean;
+        insert_error: string | null;
+      }[] = [];
+
+      for (const leg of legs) {
+        if (leg.amount <= 0) continue;
+        const order = await placeMarketBuy(PRODUCTS[leg.asset], leg.amount);
+        console.log(
+          `[theo] run_theo_roundup ${leg.asset} order success=${order.success} order_id=${orderId(order) ?? "null"}`,
+        );
+        const baseSize = order.success
+          ? deriveBaseSize(leg.preview?.base_size, leg.amount, leg.price)
+          : null;
+        const { inserted, insert_error } = await recordPurchase(supabase, {
           user_id: ctx.userId,
-          asset: "eth",
-          usd_amount: amounts.eth,
-          base_size: order.success && ethPreview?.base_size ? Number(ethPreview.base_size) : null,
-          price_at_purchase: prices?.eth ?? null,
+          asset: leg.asset,
+          usd_amount: leg.amount,
+          base_size: baseSize,
+          price_at_purchase: leg.price,
           status: order.success ? "success" : "failed",
           error: order.success ? null : JSON.stringify(order.error_response ?? "unknown error"),
         });
-        results.push({ asset: "eth", ...order });
-      }
-
-      if (amounts.cbbtc > 0) {
-        const order = await placeMarketBuy(PRODUCTS.cbbtc, amounts.cbbtc);
-        await supabase.from("crypto_purchases").insert({
-          user_id: ctx.userId,
-          asset: "cbbtc",
-          usd_amount: amounts.cbbtc,
-          base_size: order.success && btcPreview?.base_size ? Number(btcPreview.base_size) : null,
-          price_at_purchase: prices?.cbbtc ?? null,
-          status: order.success ? "success" : "failed",
-          error: order.success ? null : JSON.stringify(order.error_response ?? "unknown error"),
+        results.push({
+          asset: leg.asset,
+          success: order.success,
+          order_id: orderId(order),
+          error: order.success ? null : order.error_response,
+          recorded: inserted,
+          insert_error,
         });
-        results.push({ asset: "cbbtc", ...order });
       }
 
-      if (amounts.wld > 0) {
-        const order = await placeMarketBuy(PRODUCTS.wld, amounts.wld);
-        await supabase.from("crypto_purchases").insert({
-          user_id: ctx.userId,
-          asset: "wld",
-          usd_amount: amounts.wld,
-          base_size: order.success && wldPreview?.base_size ? Number(wldPreview.base_size) : null,
-          price_at_purchase: prices?.wld ?? null,
-          status: order.success ? "success" : "failed",
-          error: order.success ? null : JSON.stringify(order.error_response ?? "unknown error"),
-        });
-        results.push({ asset: "wld", ...order });
-      }
-
-      const allSucceeded = results.every(
-        (r) => !("success" in r) || (r as { success: boolean }).success,
-      );
-      if (allSucceeded) {
+      const allSucceeded = results.every((r) => r.success);
+      const allRecorded = results.every((r) => r.recorded);
+      // Only advance the window when every leg both filled AND was recorded —
+      // otherwise we'd silently skip round-ups that never landed in the DB.
+      if (allSucceeded && allRecorded) {
         await saveMemory(supabase, ctx.userId, "last_roundup_run", pending.window_end);
       }
 
@@ -646,6 +702,7 @@ async function executeTool(
         mode: "executed",
         total_invested: pending.total,
         split_amounts: amounts,
+        all_recorded: allRecorded,
         results,
       };
     }
@@ -724,26 +781,36 @@ async function executeTool(
 
     const retryResults = [];
     for (const row of failedRows) {
-      const productId = row.asset === "eth" ? PRODUCTS.eth : row.asset === "cbbtc" ? PRODUCTS.cbbtc : PRODUCTS.wld;
+      const asset = row.asset as "eth" | "cbbtc" | "wld";
+      const productId = PRODUCTS[asset];
       try {
         const order = await placeMarketBuy(productId, Number(row.usd_amount));
+        console.log(
+          `[theo] retry ${asset} $${row.usd_amount} success=${order.success} order_id=${orderId(order) ?? "null"}`,
+        );
         if (order.success) {
           const prices = await getPrices().catch(() => null);
-          await ctx.supabase
+          const price = prices ? prices[asset] : null;
+          const { error: updateError } = await ctx.supabase
             .from("crypto_purchases")
             .update({
               status: "success",
-              base_size: null,
-              price_at_purchase: row.asset === "eth" ? (prices?.eth ?? null) : row.asset === "cbbtc" ? (prices?.cbbtc ?? null) : (prices?.wld ?? null),
+              base_size: deriveBaseSize(null, Number(row.usd_amount), price),
+              price_at_purchase: price,
               error: null,
             })
             .eq("id", row.id);
-          retryResults.push({ asset: row.asset, success: true });
+          if (updateError) {
+            console.error(`[theo] retry update FAILED id=${row.id}: ${updateError.message}`);
+            retryResults.push({ asset, success: false, error: updateError.message });
+          } else {
+            retryResults.push({ asset, success: true });
+          }
         } else {
-          retryResults.push({ asset: row.asset, success: false, error: order.error_response });
+          retryResults.push({ asset, success: false, error: order.error_response });
         }
       } catch (err) {
-        retryResults.push({ asset: row.asset, success: false, error: String(err) });
+        retryResults.push({ asset, success: false, error: String(err) });
       }
     }
 
@@ -778,14 +845,19 @@ async function executeTool(
 
     const order = await placeMarketBuy(productId, buyInput.usd_amount);
     const prices = await getPrices().catch(() => null);
-    const priceKey = buyInput.asset as keyof typeof prices;
+    const price = prices ? prices[buyInput.asset] : null;
+    console.log(
+      `[theo] buy_crypto ${buyInput.asset} $${buyInput.usd_amount} success=${order.success} order_id=${orderId(order) ?? "null"}`,
+    );
 
-    await ctx.supabase.from("crypto_purchases").insert({
+    const { inserted, insert_error } = await recordPurchase(ctx.supabase, {
       user_id: ctx.userId,
       asset: buyInput.asset,
       usd_amount: buyInput.usd_amount,
-      base_size: order.success && preview.base_size ? Number(preview.base_size) : null,
-      price_at_purchase: prices?.[priceKey] ?? null,
+      base_size: order.success
+        ? deriveBaseSize(preview.base_size, buyInput.usd_amount, price)
+        : null,
+      price_at_purchase: price,
       status: order.success ? "success" : "failed",
       error: order.success ? null : JSON.stringify(order.error_response ?? "unknown error"),
     });
@@ -795,7 +867,9 @@ async function executeTool(
       asset: buyInput.asset,
       usd_amount: buyInput.usd_amount,
       success: order.success,
-      order_id: order.order_id ?? null,
+      order_id: orderId(order),
+      recorded: inserted,
+      insert_error,
       error: order.success ? null : order.error_response,
     };
   }
