@@ -508,11 +508,35 @@ async function executeTool(
     const split = parseSplit(memories["theo_portfolio_split"]);
     const amounts = computeSplitAmounts(pending.total, split);
 
-    const prices = await getPrices();
-    const [ethPreview, btcPreview] = await Promise.all([
-      previewMarketBuy(PRODUCTS.eth, amounts.eth),
-      previewMarketBuy(PRODUCTS.cbbtc, amounts.cbbtc),
-    ]);
+    let prices: Awaited<ReturnType<typeof getPrices>> | null = null;
+    try {
+      prices = await getPrices();
+    } catch (err) {
+      console.error("[run_theo_roundup] getPrices failed:", err);
+    }
+
+    const previews = await (async () => {
+      try {
+        return await Promise.all([
+          previewMarketBuy(PRODUCTS.eth, amounts.eth),
+          previewMarketBuy(PRODUCTS.cbbtc, amounts.cbbtc),
+        ]);
+      } catch (err) {
+        console.error("[run_theo_roundup] previewMarketBuy failed:", err);
+        return null;
+      }
+    })();
+
+    if (!previews) {
+      return {
+        mode: "preview_error",
+        message: "Could not fetch order previews from Coinbase. Check API credentials.",
+        pending_total: pending.total,
+        split_amounts: amounts,
+      };
+    }
+
+    const [ethPreview, btcPreview] = previews;
 
     if (confirmBuy === true) {
       const supabase = ctx.supabase;
