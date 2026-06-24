@@ -11,7 +11,7 @@ import { usePlaidLink } from "react-plaid-link";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Tab = "home" | "chat" | "budget";
+type Tab = "home" | "chat" | "budget" | "theo";
 
 type ChatMessage = {
   id: string;
@@ -35,18 +35,18 @@ type CategoryRow = {
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 const T = {
-  bg: "#0e1521",
-  card: "#162032",
-  cardBorder: "0.5px solid rgba(255,255,255,0.08)",
-  cardBorderAmber: "0.5px solid rgba(245,166,35,0.2)",
-  cardBorderGreen: "0.5px solid rgba(16,185,129,0.2)",
-  amber: "#f5a623",
-  green: "#10b981",
-  warn: "#f59e0b",
-  muted: "#6b7a99",
-  text: "#e2e8f0",
-  divider: "rgba(255,255,255,0.06)",
-  trackBg: "rgba(255,255,255,0.08)",
+  bg: "#F5F5F7",
+  card: "#FFFFFF",
+  cardBorder: "0.5px solid rgba(0,0,0,0.08)",
+  cardBorderAmber: "0.5px solid rgba(184,117,23,0.25)",
+  cardBorderGreen: "0.5px solid rgba(15,110,86,0.2)",
+  amber: "#B8751A",
+  green: "#0F6E56",
+  warn: "#92620B",
+  muted: "#86868B",
+  text: "#1D1D1F",
+  divider: "rgba(0,0,0,0.06)",
+  trackBg: "rgba(0,0,0,0.06)",
 } as const;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -232,7 +232,7 @@ function ProgressBar({ pct, color }: { pct: number; color?: string }) {
 
 function catBarColor(pct: number | null): string {
   if (pct === null) return T.muted;
-  if (pct >= 100) return "#ef4444";
+  if (pct >= 100) return "#C0392B";
   if (pct >= 75) return T.warn;
   return T.green;
 }
@@ -315,7 +315,7 @@ function SpendChart({ transactions }: { transactions: PlaidTx[] }) {
         <line
           x1={todayX} y1={padTop}
           x2={todayX} y2={padTop + chartH}
-          stroke="rgba(255,255,255,0.12)"
+          stroke="rgba(0,0,0,0.12)"
           strokeWidth="1"
           strokeDasharray="3,3"
         />
@@ -324,7 +324,7 @@ function SpendChart({ transactions }: { transactions: PlaidTx[] }) {
           <polyline
             points={toPoints(data.prevCumul)}
             fill="none"
-            stroke="rgba(255,255,255,0.22)"
+            stroke="rgba(0,0,0,0.22)"
             strokeWidth="1.5"
             strokeLinejoin="round"
             strokeLinecap="round"
@@ -335,7 +335,7 @@ function SpendChart({ transactions }: { transactions: PlaidTx[] }) {
           <polyline
             points={toPoints(data.curCumul)}
             fill="none"
-            stroke="#f5a623"
+            stroke="#B8751A"
             strokeWidth="2"
             strokeLinejoin="round"
             strokeLinecap="round"
@@ -347,7 +347,7 @@ function SpendChart({ transactions }: { transactions: PlaidTx[] }) {
             key={day}
             x={((day - 1) / 30) * W}
             y={H - 4}
-            fill="#6b7a99"
+            fill={T.muted}
             fontSize="9"
             textAnchor={day === 1 ? "start" : day === 31 ? "end" : "middle"}
           >
@@ -356,13 +356,13 @@ function SpendChart({ transactions }: { transactions: PlaidTx[] }) {
         ))}
       </svg>
       {/* Legend */}
-      <div style={{ display: "flex", gap: 16, marginTop: 4 }}>
+        <div style={{ display: "flex", gap: 16, marginTop: 4 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
-          <span style={{ color: "#f5a623", lineHeight: 1 }}>●</span>
+          <span style={{ color: "#B8751A", lineHeight: 1 }}>●</span>
           <span style={{ color: T.text }}>{data.curMonthLabel} {formatDollars(data.curTotal)}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
-          <span style={{ color: "rgba(255,255,255,0.3)", lineHeight: 1 }}>●</span>
+          <span style={{ color: "rgba(0,0,0,0.3)", lineHeight: 1 }}>●</span>
           <span style={{ color: T.muted }}>{data.prevMonthLabel} {formatDollars(data.prevTotal)}</span>
         </div>
       </div>
@@ -418,7 +418,7 @@ function HomeTab({
       {/* Greeting */}
       <div style={{ padding: "12px 4px 14px" }}>
         <div style={{ fontSize: 12, color: T.muted }}>{dayLabel} · {timeLabel}</div>
-        <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.5px", marginTop: 3, color: "#fff" }}>
+        <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.5px", marginTop: 3, color: T.text }}>
           Hey {name} 👋🏾
         </div>
         {theoAge && (
@@ -436,7 +436,7 @@ function HomeTab({
       <Card border={T.cardBorderAmber}>
         <CardLabel>{monthLabel} budget</CardLabel>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 10 }}>
-          <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.5px", color: "#fff" }}>
+          <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.5px", color: T.text }}>
             {formatDollars(totalSpent)}
           </div>
           <div style={{ textAlign: "right" }}>
@@ -446,7 +446,7 @@ function HomeTab({
             </div>
           </div>
         </div>
-        <ProgressBar pct={totalPercent} color={totalPercent >= 90 ? "#ef4444" : totalPercent >= 75 ? T.warn : T.amber} />
+        <ProgressBar pct={totalPercent} color={totalPercent >= 90 ? "#C0392B" : totalPercent >= 75 ? T.warn : T.amber} />
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: T.muted }}>
           <span>{totalPercent}% used</span>
           <span>{daysLeft} days left</span>
@@ -463,7 +463,7 @@ function HomeTab({
                 <div key={cat.name}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
                     <span style={{ fontSize: 11, color: T.text }}>{cat.name}</span>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: "#fff" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: T.text }}>
                       {formatDollars(cat.spent)}
                       {cat.target ? <span style={{ color: T.muted, fontWeight: 400 }}> / {formatDollars(cat.target)}</span> : null}
                     </span>
@@ -482,7 +482,7 @@ function HomeTab({
       {insight && (
         <div style={{
           display: "flex", alignItems: "center", gap: 8,
-          background: "rgba(245,166,35,0.08)", border: "0.5px solid rgba(245,166,35,0.2)",
+          background: "rgba(184,117,26,0.08)", border: "0.5px solid rgba(184,117,26,0.2)",
           borderRadius: 10, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: T.amber,
         }}>
           <span style={{ flexShrink: 0 }}>⚡</span>
@@ -501,19 +501,19 @@ function HomeTab({
             }}>
               <div style={{
                 width: 34, height: 34, borderRadius: 10,
-                background: "rgba(245,166,35,0.12)", display: "flex",
+                background: "rgba(184,117,26,0.12)", display: "flex",
                 alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0,
               }}>
                 {getBillIcon(bill.name)}
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{bill.name}</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{bill.name}</div>
                 <div style={{ fontSize: 10, color: T.muted, marginTop: 1 }}>
                   Expected {bill.daysUntil === 0 ? "today" : `in ${bill.daysUntil} day${bill.daysUntil !== 1 ? "s" : ""}`}
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{formatDollars(bill.amount)}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{formatDollars(bill.amount)}</div>
                 <div style={{ fontSize: 10, color: bill.daysUntil <= 2 ? T.amber : T.muted, marginTop: 1 }}>
                   {bill.daysUntil <= 2 ? "Soon" : `Jun ${bill.expectedDay}`}
                 </div>
@@ -539,7 +539,7 @@ function HomeTab({
             }}
           >
             <div style={{ fontSize: 20, marginBottom: 5 }}>{qa.icon}</div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#fff" }}>{qa.title}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{qa.title}</div>
             <div style={{ fontSize: 10, color: T.muted, marginTop: 1 }}>{qa.desc}</div>
           </button>
         ))}
@@ -587,10 +587,10 @@ function ChatTab({
               padding: "10px 13px",
               background: msg.isClaude ? T.card : T.amber,
               border: msg.isClaude ? T.cardBorder : "none",
-              color: msg.isClaude ? T.text : "#0e1521",
+              color: msg.isClaude ? T.text : "#FFFFFF",
             }}>
               {msg.isClaude ? (
-                <div className="prose prose-sm max-w-none text-[14px] leading-snug [&_p]:my-0 [&_p]:text-[#e2e8f0] [&_strong]:text-white [&_li]:text-[#e2e8f0] [&_a]:text-[#f5a623]">
+                <div className="prose prose-sm max-w-none text-[14px] leading-snug [&_p]:my-0 [&_p]:text-[#1D1D1F] [&_strong]:text-[#1D1D1F] [&_li]:text-[#1D1D1F] [&_a]:text-[#B8751A]">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
                 </div>
               ) : (
@@ -630,7 +630,7 @@ function ChatTab({
             disabled={isLoading}
             style={{
               background: T.card, border: T.cardBorder, borderRadius: 20,
-              padding: "5px 12px", fontSize: 11, color: "#94a3b8", cursor: "pointer",
+              padding: "5px 12px", fontSize: 11, color: T.muted, cursor: "pointer",
               opacity: isLoading ? 0.5 : 1,
             }}
           >
@@ -653,7 +653,7 @@ function ChatTab({
           disabled={isLoading}
           style={{
             flex: 1, background: T.card, border: T.cardBorder, borderRadius: 22,
-            padding: "9px 14px", fontSize: 13, color: "#fff", outline: "none",
+            padding: "9px 14px", fontSize: 13, color: T.text, outline: "none",
           }}
         />
         <button
@@ -663,7 +663,7 @@ function ChatTab({
             width: 36, height: 36, background: T.amber, border: "none",
             borderRadius: "50%", display: "flex", alignItems: "center",
             justifyContent: "center", cursor: "pointer", flexShrink: 0,
-            opacity: !draft.trim() || isLoading ? 0.4 : 1, color: "#0e1521",
+            opacity: !draft.trim() || isLoading ? 0.4 : 1, color: "#FFFFFF",
           }}
         >
           <SendIcon />
@@ -718,7 +718,7 @@ function BudgetTab({
         <button
           onClick={onConnectChase}
           disabled={plaidConnecting}
-          style={{ background: T.amber, color: "#0e1521", border: "none", borderRadius: 22, padding: "11px 28px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: plaidConnecting ? 0.6 : 1 }}
+          style={{ background: T.amber, color: "#FFFFFF", border: "none", borderRadius: 22, padding: "11px 28px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: plaidConnecting ? 0.6 : 1 }}
         >
           {plaidConnecting ? "Connecting…" : "Connect Chase"}
         </button>
@@ -731,11 +731,11 @@ function BudgetTab({
       {/* Header */}
       <div style={{ padding: "14px 2px 10px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.3px", color: "#fff" }}>{monthLabel}</div>
+          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.3px", color: T.text }}>{monthLabel}</div>
           <div style={{ fontSize: 11, color: T.muted }}>{daysLeft} days left</div>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 4 }}>
-          <div style={{ fontSize: 32, fontWeight: 700, letterSpacing: "-0.5px", color: "#fff" }}>{formatDollars(totalSpent)}</div>
+          <div style={{ fontSize: 32, fontWeight: 700, letterSpacing: "-0.5px", color: T.text }}>{formatDollars(totalSpent)}</div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
             <div style={{ fontSize: 13, color: T.muted }}>of {formatDollars(MONTH_BUDGET)}</div>
             <button
@@ -748,7 +748,7 @@ function BudgetTab({
           </div>
         </div>
         <div style={{ marginTop: 8 }}>
-          <ProgressBar pct={totalPercent} color={totalPercent >= 90 ? "#ef4444" : totalPercent >= 75 ? T.warn : T.amber} />
+          <ProgressBar pct={totalPercent} color={totalPercent >= 90 ? "#C0392B" : totalPercent >= 75 ? T.warn : T.amber} />
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 11, color: T.muted }}>
             <span>{totalPercent}%</span>
             <span>{formatDollars(Math.max(0, MONTH_BUDGET - totalSpent))} remaining</span>
@@ -769,7 +769,7 @@ function BudgetTab({
             return (
               <div key={cat.name} style={{ padding: "12px 16px", borderBottom: i < categories.length - 1 ? `0.5px solid ${T.divider}` : "none" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 5 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{cat.name}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{cat.name}</span>
                   <span style={{ fontSize: 12, color: T.text }}>
                     {formatDollars(cat.spent)}
                     {cat.target ? <span style={{ color: T.muted }}> / {formatDollars(cat.target)}</span> : null}
@@ -797,11 +797,12 @@ function BottomNav({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
     { id: "home", label: "Home", icon: "⌂" },
     { id: "chat", label: "Chat", icon: "◎" },
     { id: "budget", label: "Budget", icon: "▦" },
+    { id: "theo", label: "Theo Fund", icon: "₸" },
   ];
   return (
     <nav
       style={{
-        display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
+        display: "grid", gridTemplateColumns: "repeat(4, 1fr)",
         borderTop: `0.5px solid ${T.divider}`, background: T.bg,
         paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))", paddingTop: 8,
         flexShrink: 0,
@@ -850,6 +851,20 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
   const [isLoading, setIsLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  // Theo Fund state (no API endpoint yet — renders gracefully with null)
+  const [theoSummary] = useState<{
+    total_invested: number;
+    current_value: number;
+    gain_usd: number;
+    gain_pct: number;
+    by_asset: {
+      eth: { invested: number; base_size: number; current_value: number; current_price: number };
+      cbbtc: { invested: number; base_size: number; current_value: number; current_price: number };
+      usdc: { invested: number; current_value: number };
+    };
+  } | null>(null);
+  const [theoLoading] = useState(false);
 
   // Budget / Plaid state
   const [refreshing, setRefreshing] = useState(false);
@@ -1040,11 +1055,11 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
   };
 
   return (
-    <div style={{ display: "flex", height: "100dvh", flexDirection: "column", background: T.bg, color: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+    <div style={{ display: "flex", height: "100dvh", flexDirection: "column", background: T.bg, color: T.text, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
       {/* Header — only shown on chat and budget */}
       {tab !== "home" && (
         <header style={{ flexShrink: 0, padding: "max(0.75rem, env(safe-area-inset-top)) 16px 12px", borderBottom: `0.5px solid ${T.divider}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h1 style={{ fontSize: 18, fontWeight: 700 }}>{tab === "chat" ? "Chat" : "Budget"}</h1>
+          <h1 style={{ fontSize: 18, fontWeight: 700 }}>{tab === "chat" ? "Chat" : tab === "theo" ? "Theo Fund" : "Budget"}</h1>
           <form action={signOutAction}>
             <button type="submit" style={{ fontSize: 12, color: T.muted, background: "none", border: "none", cursor: "pointer" }}>
               Sign out
@@ -1103,6 +1118,113 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             refreshing={refreshing}
             onRefresh={() => void handleRefresh()}
           />
+        )}
+        {tab === "theo" && !theoLoading && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
+            {/* Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 600, color: T.text }}>Theo Fund</div>
+                <div style={{ fontSize: 13, color: T.muted, marginTop: 2 }}>
+                  Round-ups from Chase, invested into ETH / BTC / USDC
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: T.muted }}>{getTheoAgeLabel()}</div>
+            </div>
+
+            {/* 3-column metric row */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px" }}>
+              {[
+                { label: "Invested", value: `$${(theoSummary?.total_invested ?? 0).toFixed(2)}` },
+                { label: "Current Value", value: `$${(theoSummary?.current_value ?? 0).toFixed(2)}` },
+                {
+                  label: "Total Gain",
+                  value: `$${(theoSummary?.gain_usd ?? 0).toFixed(2)}`,
+                  sub: `${(theoSummary?.gain_pct ?? 0).toFixed(1)}%`,
+                  color: (theoSummary?.gain_usd ?? 0) >= 0 ? T.green : T.warn,
+                },
+              ].map((m) => (
+                <div key={m.label} style={{
+                  background: T.card,
+                  border: T.cardBorder,
+                  borderRadius: 12,
+                  padding: "12px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                }}>
+                  <div style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{m.label}</div>
+                  <div style={{ fontSize: 18, fontWeight: 600, color: m.color ?? T.text }}>{m.value}</div>
+                  {m.sub && <div style={{ fontSize: 11, color: m.color ?? T.muted }}>{m.sub}</div>}
+                </div>
+              ))}
+            </div>
+
+            {/* Pending round-ups card */}
+            <div style={{ background: T.card, border: T.cardBorderAmber, borderRadius: 12, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: T.text }}>Pending round-ups</div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>Ask the assistant to check and invest</div>
+              </div>
+              <button
+                onClick={() => {
+                  setTab("chat");
+                  void sendMessage("Check for pending round-ups and invest them into the Theo Fund");
+                }}
+                style={{
+                  background: T.amber,
+                  color: "#FFFFFF",
+                  border: "none",
+                  borderRadius: 8,
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Check now
+              </button>
+            </div>
+
+            {/* Portfolio split card */}
+            <div style={{ background: T.card, border: T.cardBorder, borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ fontSize: 12, color: T.muted, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}>Portfolio Split</div>
+              <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", gap: 2 }}>
+                <div style={{ flex: 40, background: "#627EEA" }} />
+                <div style={{ flex: 30, background: "#F7931A" }} />
+                <div style={{ flex: 30, background: "#2775CA" }} />
+              </div>
+              <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
+                {[
+                  { label: "ETH", pct: 40, color: "#627EEA" },
+                  { label: "BTC", pct: 30, color: "#F7931A" },
+                  { label: "USDC", pct: 30, color: "#2775CA" },
+                ].map((a) => (
+                  <div key={a.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: a.color }} />
+                    <div style={{ fontSize: 12, color: T.muted }}>{a.label} {a.pct}%</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Recent activity */}
+            <div style={{ background: T.card, border: T.cardBorder, borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ fontSize: 12, color: T.muted, textTransform: "uppercase", letterSpacing: "0.04em" }}>Recent Activity</div>
+              {theoSummary ? (
+                <div style={{ marginTop: 8, fontSize: 13, color: T.muted }}>
+                  {theoSummary.total_invested === 0
+                    ? "No purchases yet — run your first round-up to get started."
+                    : `${Object.entries(theoSummary.by_asset)
+                        .filter(([, v]) => (v as { invested: number }).invested > 0)
+                        .map(([k, v]) => `${k.toUpperCase()}: $${(v as { invested: number }).invested.toFixed(2)} invested`)
+                        .join(" · ")}`}
+                </div>
+              ) : (
+                <div style={{ marginTop: 8, fontSize: 13, color: T.muted }}>No purchases yet.</div>
+              )}
+            </div>
+          </div>
         )}
       </div>
 
