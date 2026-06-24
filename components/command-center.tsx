@@ -1247,6 +1247,26 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                 <div style={{ marginTop: 8, fontSize: 13, color: T.muted }}>No purchases yet.</div>
               )}
             </div>
+
+            {/* Debug link */}
+            <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 4 }}>
+              <a
+                href="/api/theo-fund/debug"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  fontSize: 11,
+                  color: T.muted,
+                  textDecoration: "none",
+                  padding: "4px 8px",
+                  border: T.cardBorder,
+                  borderRadius: 6,
+                  background: T.card,
+                }}
+              >
+                Debug
+              </a>
+            </div>
           </div>
         )}
       </div>
