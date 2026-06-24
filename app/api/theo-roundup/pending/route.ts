@@ -27,7 +27,7 @@ export async function GET() {
     .from("memories")
     .select("value")
     .eq("user_id", user.id)
-    .eq("key", "theo_last_roundup_date")
+    .eq("key", "last_roundup_run")
     .single();
 
   const result = await calculatePendingRoundups(
