@@ -852,8 +852,8 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
   const [isTyping, setIsTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // Theo Fund state (no API endpoint yet — renders gracefully with null)
-  const [theoSummary] = useState<{
+  // Theo Fund state
+  const [theoSummary, setTheoSummary] = useState<{
     total_invested: number;
     current_value: number;
     gain_usd: number;
@@ -861,10 +861,10 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     by_asset: {
       eth: { invested: number; base_size: number; current_value: number; current_price: number };
       cbbtc: { invested: number; base_size: number; current_value: number; current_price: number };
-      usdc: { invested: number; current_value: number };
+      wld: { invested: number; base_size: number; current_value: number; current_price: number };
     };
   } | null>(null);
-  const [theoLoading] = useState(false);
+  const [theoLoading, setTheoLoading] = useState(false);
 
   // Budget / Plaid state
   const [refreshing, setRefreshing] = useState(false);
@@ -902,6 +902,21 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     }
   }, []);
 
+  const loadTheoSummary = useCallback(async () => {
+    setTheoLoading(true);
+    try {
+      const res = await fetch("/api/theo-fund/summary");
+      if (res.ok) {
+        const data = await res.json();
+        setTheoSummary(data);
+      }
+    } catch {
+      // leave theoSummary as null
+    } finally {
+      setTheoLoading(false);
+    }
+  }, []);
+
   const { open, ready } = usePlaidLink({
     token: linkToken,
     onSuccess: async (public_token, metadata) => {
@@ -921,6 +936,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
   });
 
   useEffect(() => { void loadBudgetData(); }, [loadBudgetData]);
+  useEffect(() => { if (tab === "theo") void loadTheoSummary(); }, [tab, loadTheoSummary]);
   useEffect(() => { if (linkToken && ready) open(); }, [linkToken, ready, open]);
 
   const connectChase = async () => {
@@ -1126,7 +1142,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
               <div>
                 <div style={{ fontSize: 20, fontWeight: 600, color: T.text }}>Theo Fund</div>
                 <div style={{ fontSize: 13, color: T.muted, marginTop: 2 }}>
-                  Round-ups from Chase, invested into ETH / BTC / USDC
+                  Round-ups from Chase, invested into ETH / BTC / WLD
                 </div>
               </div>
               <div style={{ fontSize: 12, color: T.muted }}>{getTheoAgeLabel()}</div>
@@ -1170,6 +1186,7 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                 onClick={() => {
                   setTab("chat");
                   void sendMessage("Check for pending round-ups and invest them into the Theo Fund");
+                  void loadTheoSummary();
                 }}
                 style={{
                   background: T.amber,
@@ -1190,15 +1207,15 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             <div style={{ background: T.card, border: T.cardBorder, borderRadius: 12, padding: "14px 16px" }}>
               <div style={{ fontSize: 12, color: T.muted, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}>Portfolio Split</div>
               <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", gap: 2 }}>
-                <div style={{ flex: 40, background: "#627EEA" }} />
-                <div style={{ flex: 30, background: "#F7931A" }} />
-                <div style={{ flex: 30, background: "#2775CA" }} />
+                <div style={{ flex: 34, background: "#627EEA" }} />
+                <div style={{ flex: 33, background: "#F7931A" }} />
+                <div style={{ flex: 33, background: "#D85A30" }} />
               </div>
               <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
                 {[
-                  { label: "ETH", pct: 40, color: "#627EEA" },
-                  { label: "BTC", pct: 30, color: "#F7931A" },
-                  { label: "USDC", pct: 30, color: "#2775CA" },
+                  { label: "ETH", pct: 34, color: "#627EEA" },
+                  { label: "BTC", pct: 33, color: "#F7931A" },
+                  { label: "WLD", pct: 33, color: "#D85A30" },
                 ].map((a) => (
                   <div key={a.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <div style={{ width: 8, height: 8, borderRadius: "50%", background: a.color }} />

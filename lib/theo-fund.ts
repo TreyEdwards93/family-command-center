@@ -2,7 +2,7 @@ import { plaidClient } from "@/lib/plaid";
 
 export const MIN_RUN_USD = 5;
 export const MAX_RUN_USD = 500;
-export const DEFAULT_SPLIT = { eth: 40, cbbtc: 30, usdc: 30 };
+export const DEFAULT_SPLIT = { eth: 34, cbbtc: 33, wld: 33 };
 
 const EXCLUDED_CATEGORIES = new Set([
   "TRANSFER_IN",
@@ -11,7 +11,7 @@ const EXCLUDED_CATEGORIES = new Set([
   "BANK_FEES",
 ]);
 
-export type PortfolioSplit = { eth: number; cbbtc: number; usdc: number };
+export type PortfolioSplit = { eth: number; cbbtc: number; wld: number };
 
 export function parseSplit(raw: string | undefined): PortfolioSplit {
   if (!raw) return DEFAULT_SPLIT;
@@ -20,9 +20,9 @@ export function parseSplit(raw: string | undefined): PortfolioSplit {
     const split = {
       eth: parsed.eth ?? DEFAULT_SPLIT.eth,
       cbbtc: parsed.cbbtc ?? DEFAULT_SPLIT.cbbtc,
-      usdc: parsed.usdc ?? DEFAULT_SPLIT.usdc,
+      wld: parsed.wld ?? DEFAULT_SPLIT.wld,
     };
-    const sum = split.eth + split.cbbtc + split.usdc;
+    const sum = split.eth + split.cbbtc + split.wld;
     return sum === 100 ? split : DEFAULT_SPLIT;
   } catch {
     return DEFAULT_SPLIT;
@@ -118,7 +118,7 @@ export async function calculatePendingRoundups(
   };
 }
 
-export type SplitAmounts = { eth: number; cbbtc: number; usdc: number };
+export type SplitAmounts = { eth: number; cbbtc: number; wld: number };
 
 export function computeSplitAmounts(
   total: number,
@@ -126,6 +126,6 @@ export function computeSplitAmounts(
 ): SplitAmounts {
   const eth = Math.round(total * split.eth) / 100;
   const cbbtc = Math.round(total * split.cbbtc) / 100;
-  const usdc = Math.round((total - eth - cbbtc) * 100) / 100;
-  return { eth, cbbtc, usdc };
+  const wld = Math.round((total - eth - cbbtc) * 100) / 100;
+  return { eth, cbbtc, wld };
 }
