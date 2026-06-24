@@ -116,6 +116,12 @@ const tools: Tool[] = [
       properties: {},
     },
   },
+  {
+    name: "retry_failed_crypto_buy",
+    description:
+      "Retry any crypto purchases that previously failed (e.g. due to insufficient Coinbase balance). Re-attempts each failed leg individually using its original dollar amount. Use when the user says a buy failed and asks to retry, or after they've topped up their Coinbase balance.",
+    input_schema: { type: "object", properties: {} },
+  },
 ];
 
 type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
@@ -399,6 +405,8 @@ run_theo_roundup calculates round-ups from Chase spending (ceil minus amount per
 
 get_crypto_performance: shows Theo's total invested, current market value, and gain/loss broken out by ETH, cbBTC, and USDC. Run it when asked about how the fund is doing, its value, or returns.
 
+If a buy leg fails, use retry_failed_crypto_buy when the user asks to retry or after they mention topping up their Coinbase balance — do not tell the user to retry manually on Coinbase.
+
 Style: Short and casual. Never use em dashes. No bullet points in responses. Make reasonable assumptions rather than asking clarifying questions. You are action-oriented.
 
 Current context:
@@ -548,8 +556,10 @@ async function executeTool(
           user_id: ctx.userId,
           asset: "eth",
           usd_amount: amounts.eth,
-          base_size: order.success && ethPreview.base_size ? Number(ethPreview.base_size) : null,
+          base_size: order.success && ethPreview?.base_size ? Number(ethPreview.base_size) : null,
           price_at_purchase: prices?.eth ?? null,
+          status: order.success ? "success" : "failed",
+          error: order.success ? null : JSON.stringify(order.error_response ?? "unknown error"),
         });
         results.push({ asset: "eth", ...order });
       }
@@ -560,8 +570,10 @@ async function executeTool(
           user_id: ctx.userId,
           asset: "cbbtc",
           usd_amount: amounts.cbbtc,
-          base_size: order.success && btcPreview.base_size ? Number(btcPreview.base_size) : null,
+          base_size: order.success && btcPreview?.base_size ? Number(btcPreview.base_size) : null,
           price_at_purchase: prices?.cbbtc ?? null,
+          status: order.success ? "success" : "failed",
+          error: order.success ? null : JSON.stringify(order.error_response ?? "unknown error"),
         });
         results.push({ asset: "cbbtc", ...order });
       }
@@ -573,11 +585,17 @@ async function executeTool(
           usd_amount: amounts.usdc,
           base_size: null,
           price_at_purchase: null,
+          status: "success",
         });
         results.push({ asset: "usdc", note: "USD held as USDC, no order placed" });
       }
 
-      await saveMemory(supabase, ctx.userId, "last_roundup_run", pending.window_end);
+      const allSucceeded = results.every(
+        (r) => !("success" in r) || (r as { success: boolean }).success,
+      );
+      if (allSucceeded) {
+        await saveMemory(supabase, ctx.userId, "last_roundup_run", pending.window_end);
+      }
 
       return {
         mode: "executed",
@@ -605,7 +623,8 @@ async function executeTool(
     const { data: purchases } = await ctx.supabase
       .from("crypto_purchases")
       .select("asset, usd_amount, base_size")
-      .eq("user_id", ctx.userId);
+      .eq("user_id", ctx.userId)
+      .eq("status", "success");
 
     if (!purchases || purchases.length === 0) {
       return { message: "No crypto purchases recorded yet." };
@@ -644,6 +663,50 @@ async function executeTool(
         cbbtc: { ...summary.cbbtc, current_price: prices.cbbtc },
         usdc: summary.usdc,
       },
+    };
+  }
+
+  if (name === "retry_failed_crypto_buy") {
+    const { data: failedRows } = await ctx.supabase
+      .from("crypto_purchases")
+      .select("id, asset, usd_amount")
+      .eq("user_id", ctx.userId)
+      .eq("status", "failed");
+
+    if (!failedRows || failedRows.length === 0) {
+      return { message: "No failed buys to retry." };
+    }
+
+    const retryResults = [];
+    for (const row of failedRows) {
+      const productId = row.asset === "eth" ? PRODUCTS.eth : PRODUCTS.cbbtc;
+      try {
+        const order = await placeMarketBuy(productId, Number(row.usd_amount));
+        if (order.success) {
+          const prices = await getPrices().catch(() => null);
+          await ctx.supabase
+            .from("crypto_purchases")
+            .update({
+              status: "success",
+              base_size: null,
+              price_at_purchase: row.asset === "eth" ? (prices?.eth ?? null) : (prices?.cbbtc ?? null),
+              error: null,
+            })
+            .eq("id", row.id);
+          retryResults.push({ asset: row.asset, success: true });
+        } else {
+          retryResults.push({ asset: row.asset, success: false, error: order.error_response });
+        }
+      } catch (err) {
+        retryResults.push({ asset: row.asset, success: false, error: String(err) });
+      }
+    }
+
+    return {
+      retried: retryResults.length,
+      succeeded: retryResults.filter((r) => r.success).length,
+      failed: retryResults.filter((r) => !r.success).length,
+      details: retryResults,
     };
   }
 

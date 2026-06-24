@@ -555,7 +555,7 @@ const CHIPS = [
   "What did we spend at Costco?",
   "Set a grocery target",
   "Show me our recurring bills",
-  "Clear the display",
+  "Do I have any round-ups pending?",
 ];
 
 function ChatTab({
