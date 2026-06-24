@@ -95,7 +95,7 @@ const tools: Tool[] = [
   {
     name: "run_theo_roundup",
     description:
-      "Calculate pending round-ups from Chase transactions for Theo's investment fund and preview or execute the resulting Coinbase orders (40% ETH / 30% cbBTC / 30% USDC by default, configurable via the theo_portfolio_split memory). Without confirm=true, returns a preview only. Always show the user the full plain-English summary: total, transaction count, date window, per-asset split, and previewed order details with fees. After showing a preview, ask the user if they want to execute. If they confirm, call this tool again with confirm=true.",
+      "Calculate pending round-ups from Chase transactions for Theo's investment fund and preview or execute the resulting Coinbase orders (34% ETH / 33% cbBTC / 33% WLD by default, configurable via the theo_portfolio_split memory). Without confirm=true, returns a preview only. Always show the user the full plain-English summary: total, transaction count, date window, per-asset split, and previewed order details with fees. After showing a preview, ask the user if they want to execute. If they confirm, call this tool again with confirm=true.",
     input_schema: {
       type: "object",
       properties: {
@@ -110,7 +110,7 @@ const tools: Tool[] = [
   {
     name: "get_crypto_performance",
     description:
-      "Show Theo's crypto fund performance: total invested via round-ups, current market value, dollar and percent gain/loss, broken out by ETH, cbBTC, and USDC.",
+      "Show Theo's crypto fund performance: total invested via round-ups, current market value, dollar and percent gain/loss, broken out by ETH, cbBTC, and WLD.",
     input_schema: {
       type: "object",
       properties: {},
@@ -121,6 +121,45 @@ const tools: Tool[] = [
     description:
       "Retry any crypto purchases that previously failed (e.g. due to insufficient Coinbase balance). Re-attempts each failed leg individually using its original dollar amount. Use when the user says a buy failed and asks to retry, or after they've topped up their Coinbase balance.",
     input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "buy_crypto",
+    description:
+      "Place an immediate market buy for a specific crypto asset using a given USD amount. Use when the user asks to buy a specific amount of ETH, BTC (cbBTC), or WLD directly — not as part of a round-up. Always preview first unless the user has already seen the preview and confirmed. Assets: 'eth', 'cbbtc', 'wld'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        asset: {
+          type: "string",
+          enum: ["eth", "cbbtc", "wld"],
+          description: "The asset to buy.",
+        },
+        usd_amount: {
+          type: "number",
+          description: "USD amount to spend.",
+        },
+        confirm: {
+          type: "boolean",
+          description:
+            "Set to true when the user explicitly confirms after seeing the preview. When false or omitted, returns a preview only.",
+        },
+      },
+      required: ["asset", "usd_amount"],
+    },
+  },
+  {
+    name: "set_portfolio_split",
+    description:
+      "Update the ETH/cbBTC/WLD split percentages used for future round-up buys. Percentages must sum to 100. Saves to memory so all future run_theo_roundup calls use the new split. Use when the user says things like 'put more into ETH', 'change the split to 50/25/25', or 'rebalance to 60% ETH'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        eth: { type: "number", description: "ETH percentage (0-100)" },
+        cbbtc: { type: "number", description: "cbBTC percentage (0-100)" },
+        wld: { type: "number", description: "WLD percentage (0-100)" },
+      },
+      required: ["eth", "cbbtc", "wld"],
+    },
   },
 ];
 
@@ -401,9 +440,12 @@ Memory: Use save_memory proactively when the user shares budget targets, recurri
 
 Theo Fund: Two tools manage Theo's crypto investment fund.
 
-run_theo_roundup calculates round-ups from Chase spending (ceil minus amount per transaction) and previews or executes crypto buys for Theo's long-term fund. When asked about round-ups or Theo's fund, run it and present a plain-English summary: total, number of transactions, date window, the ETH/cbBTC/USDC split in dollars, and previewed order details including fees. After presenting the preview, ask the user if they want to execute. If they confirm, call run_theo_roundup again with confirm=true to place the real orders. The portfolio split lives in the theo_portfolio_split memory as JSON like {"eth":40,"cbbtc":30,"usdc":30}; use save_memory to change it when asked.
+run_theo_roundup calculates round-ups from Chase spending (ceil minus amount per transaction) and previews or executes crypto buys for Theo's long-term fund. When asked about round-ups or Theo's fund, run it and present a plain-English summary: total, number of transactions, date window, the ETH/cbBTC/WLD split in dollars, and previewed order details including fees. After presenting the preview, ask the user if they want to execute. If they confirm, call run_theo_roundup again with confirm=true to place the real orders. The portfolio split lives in the theo_portfolio_split memory as JSON like {"eth":34,"cbbtc":33,"wld":33}; use save_memory to change it when asked.
 
-get_crypto_performance: shows Theo's total invested, current market value, and gain/loss broken out by ETH, cbBTC, and USDC. Run it when asked about how the fund is doing, its value, or returns.
+get_crypto_performance: shows Theo's total invested, current market value, and gain/loss broken out by ETH, cbBTC, and WLD. Run it when asked about how the fund is doing, its value, or returns.
+
+buy_crypto: places an immediate market buy for a specific asset and USD amount — always preview first, then confirm. Use when Trey asks to buy a specific amount outside of round-ups.
+set_portfolio_split: updates the ETH/cbBTC/WLD split for future round-ups and saves it to memory. Use when Trey asks to change the allocation, put more into a specific asset, or rebalance. Percentages must sum to 100.
 
 If a buy leg fails, use retry_failed_crypto_buy when the user asks to retry or after they mention topping up their Coinbase balance — do not tell the user to retry manually on Coinbase.
 
@@ -528,6 +570,7 @@ async function executeTool(
         return await Promise.all([
           previewMarketBuy(PRODUCTS.eth, amounts.eth),
           previewMarketBuy(PRODUCTS.cbbtc, amounts.cbbtc),
+          previewMarketBuy(PRODUCTS.wld, amounts.wld),
         ]);
       } catch (err) {
         console.error("[run_theo_roundup] previewMarketBuy failed:", err);
@@ -544,7 +587,7 @@ async function executeTool(
       };
     }
 
-    const [ethPreview, btcPreview] = previews;
+    const [ethPreview, btcPreview, wldPreview] = previews;
 
     if (confirmBuy === true) {
       const supabase = ctx.supabase;
@@ -578,16 +621,18 @@ async function executeTool(
         results.push({ asset: "cbbtc", ...order });
       }
 
-      if (amounts.usdc > 0) {
+      if (amounts.wld > 0) {
+        const order = await placeMarketBuy(PRODUCTS.wld, amounts.wld);
         await supabase.from("crypto_purchases").insert({
           user_id: ctx.userId,
-          asset: "usdc",
-          usd_amount: amounts.usdc,
-          base_size: null,
-          price_at_purchase: null,
-          status: "success",
+          asset: "wld",
+          usd_amount: amounts.wld,
+          base_size: order.success && wldPreview?.base_size ? Number(wldPreview.base_size) : null,
+          price_at_purchase: prices?.wld ?? null,
+          status: order.success ? "success" : "failed",
+          error: order.success ? null : JSON.stringify(order.error_response ?? "unknown error"),
         });
-        results.push({ asset: "usdc", note: "USD held as USDC, no order placed" });
+        results.push({ asset: "wld", ...order });
       }
 
       const allSucceeded = results.every(
@@ -613,8 +658,7 @@ async function executeTool(
       window: { since: pending.window_start, through: pending.window_end },
       split_percentages: split,
       split_amounts: amounts,
-      usdc_note: "USDC leg is a 1:1 USD conversion on Coinbase — no order, no fee.",
-      order_previews: [ethPreview, btcPreview],
+      order_previews: [ethPreview, btcPreview, wldPreview],
       sample_transactions: pending.transactions.slice(0, 10),
     };
   }
@@ -635,21 +679,22 @@ async function executeTool(
     const summary: Record<string, { invested: number; base_size: number; current_value: number }> = {
       eth: { invested: 0, base_size: 0, current_value: 0 },
       cbbtc: { invested: 0, base_size: 0, current_value: 0 },
-      usdc: { invested: 0, base_size: 0, current_value: 0 },
+      wld: { invested: 0, base_size: 0, current_value: 0 },
     };
 
     for (const p of purchases) {
-      const asset = p.asset as "eth" | "cbbtc" | "usdc";
+      const asset = p.asset as "eth" | "cbbtc" | "wld";
+      if (!summary[asset]) summary[asset] = { invested: 0, base_size: 0, current_value: 0 };
       summary[asset].invested += Number(p.usd_amount);
       if (p.base_size) summary[asset].base_size += Number(p.base_size);
     }
 
     summary.eth.current_value = summary.eth.base_size * prices.eth;
     summary.cbbtc.current_value = summary.cbbtc.base_size * prices.cbbtc;
-    summary.usdc.current_value = summary.usdc.invested;
+    summary.wld.current_value = summary.wld.base_size * prices.wld;
 
-    const totalInvested = summary.eth.invested + summary.cbbtc.invested + summary.usdc.invested;
-    const totalValue = summary.eth.current_value + summary.cbbtc.current_value + summary.usdc.current_value;
+    const totalInvested = summary.eth.invested + summary.cbbtc.invested + summary.wld.invested;
+    const totalValue = summary.eth.current_value + summary.cbbtc.current_value + summary.wld.current_value;
     const gain = totalValue - totalInvested;
     const gainPct = totalInvested > 0 ? (gain / totalInvested) * 100 : 0;
 
@@ -661,7 +706,7 @@ async function executeTool(
       by_asset: {
         eth: { ...summary.eth, current_price: prices.eth },
         cbbtc: { ...summary.cbbtc, current_price: prices.cbbtc },
-        usdc: summary.usdc,
+        wld: { ...summary.wld, current_price: prices.wld },
       },
     };
   }
@@ -679,7 +724,7 @@ async function executeTool(
 
     const retryResults = [];
     for (const row of failedRows) {
-      const productId = row.asset === "eth" ? PRODUCTS.eth : PRODUCTS.cbbtc;
+      const productId = row.asset === "eth" ? PRODUCTS.eth : row.asset === "cbbtc" ? PRODUCTS.cbbtc : PRODUCTS.wld;
       try {
         const order = await placeMarketBuy(productId, Number(row.usd_amount));
         if (order.success) {
@@ -689,7 +734,7 @@ async function executeTool(
             .update({
               status: "success",
               base_size: null,
-              price_at_purchase: row.asset === "eth" ? (prices?.eth ?? null) : (prices?.cbbtc ?? null),
+              price_at_purchase: row.asset === "eth" ? (prices?.eth ?? null) : row.asset === "cbbtc" ? (prices?.cbbtc ?? null) : (prices?.wld ?? null),
               error: null,
             })
             .eq("id", row.id);
@@ -707,6 +752,66 @@ async function executeTool(
       succeeded: retryResults.filter((r) => r.success).length,
       failed: retryResults.filter((r) => !r.success).length,
       details: retryResults,
+    };
+  }
+
+  if (name === "buy_crypto") {
+    const buyInput = input as { asset: "eth" | "cbbtc" | "wld"; usd_amount: number; confirm?: boolean };
+    const productId = PRODUCTS[buyInput.asset];
+
+    let preview;
+    try {
+      preview = await previewMarketBuy(productId, buyInput.usd_amount);
+    } catch (err) {
+      return { error: "Could not fetch order preview from Coinbase.", detail: String(err) };
+    }
+
+    if (!buyInput.confirm) {
+      return {
+        mode: "preview",
+        asset: buyInput.asset,
+        usd_amount: buyInput.usd_amount,
+        preview,
+        note: "Reply with confirmation to execute this buy.",
+      };
+    }
+
+    const order = await placeMarketBuy(productId, buyInput.usd_amount);
+    const prices = await getPrices().catch(() => null);
+    const priceKey = buyInput.asset as keyof typeof prices;
+
+    await ctx.supabase.from("crypto_purchases").insert({
+      user_id: ctx.userId,
+      asset: buyInput.asset,
+      usd_amount: buyInput.usd_amount,
+      base_size: order.success && preview.base_size ? Number(preview.base_size) : null,
+      price_at_purchase: prices?.[priceKey] ?? null,
+      status: order.success ? "success" : "failed",
+      error: order.success ? null : JSON.stringify(order.error_response ?? "unknown error"),
+    });
+
+    return {
+      mode: "executed",
+      asset: buyInput.asset,
+      usd_amount: buyInput.usd_amount,
+      success: order.success,
+      order_id: order.order_id ?? null,
+      error: order.success ? null : order.error_response,
+    };
+  }
+
+  if (name === "set_portfolio_split") {
+    const splitInput = input as { eth: number; cbbtc: number; wld: number };
+    const sum = splitInput.eth + splitInput.cbbtc + splitInput.wld;
+    if (Math.round(sum) !== 100) {
+      return { error: `Percentages must sum to 100, got ${sum}.` };
+    }
+    const split = { eth: splitInput.eth, cbbtc: splitInput.cbbtc, wld: splitInput.wld };
+    await saveMemory(ctx.supabase, ctx.userId, "theo_portfolio_split", JSON.stringify(split));
+    return {
+      success: true,
+      new_split: split,
+      message: `Portfolio split updated to ${splitInput.eth}% ETH / ${splitInput.cbbtc}% cbBTC / ${splitInput.wld}% WLD. All future round-ups will use this split.`,
     };
   }
 
