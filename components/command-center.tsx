@@ -859,13 +859,25 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
     gain_usd: number;
     gain_pct: number;
     failed_count?: number;
+    actual_split: { eth: number; btc: number; wld: number } | null;
+    avg_buy_price: { eth: number | null; btc: number | null; wld: number | null } | null;
+    this_month_invested: number;
+    last_month_invested: number;
     by_asset: {
       eth: { invested: number; base_size: number; current_value: number; current_price: number };
-      cbbtc: { invested: number; base_size: number; current_value: number; current_price: number };
+      btc: { invested: number; base_size: number; current_value: number; current_price: number };
       wld: { invested: number; base_size: number; current_value: number; current_price: number };
     };
   } | null>(null);
   const [theoLoading, setTheoLoading] = useState(false);
+  const [pendingRoundups, setPendingRoundups] = useState<{
+    connected: boolean;
+    pending: number;
+    meets_minimum: boolean;
+    transaction_count: number;
+    since: string;
+    through: string;
+  } | null>(null);
 
   // Budget / Plaid state
   const [refreshing, setRefreshing] = useState(false);
@@ -906,13 +918,20 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
   const loadTheoSummary = useCallback(async () => {
     setTheoLoading(true);
     try {
-      const res = await fetch("/api/theo-fund/summary");
-      if (res.ok) {
-        const data = await res.json();
+      const [summaryRes, pendingRes] = await Promise.all([
+        fetch("/api/theo-fund/summary"),
+        fetch("/api/theo-roundup/pending"),
+      ]);
+      if (summaryRes.ok) {
+        const data = await summaryRes.json();
         setTheoSummary(data);
       }
+      if (pendingRes.ok) {
+        const data = await pendingRes.json();
+        setPendingRoundups(data);
+      }
     } catch {
-      // leave theoSummary as null
+      // leave state as null
     } finally {
       setTheoLoading(false);
     }
@@ -1145,6 +1164,12 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
                 <div style={{ fontSize: 13, color: T.muted, marginTop: 2 }}>
                   Round-ups from Chase, invested into ETH / BTC / WLD
                 </div>
+                {theoSummary?.this_month_invested != null && theoSummary.this_month_invested > 0 && (
+                  <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>
+                    ${theoSummary.this_month_invested.toFixed(2)} invested this month
+                    {theoSummary.last_month_invested > 0 && ` · $${theoSummary.last_month_invested.toFixed(2)} last month`}
+                  </div>
+                )}
               </div>
               <div style={{ fontSize: 12, color: T.muted }}>{getTheoAgeLabel()}</div>
             </div>
@@ -1180,8 +1205,18 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             {/* Pending round-ups card */}
             <div style={{ background: T.card, border: T.cardBorderAmber, borderRadius: 12, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: T.text }}>Pending round-ups</div>
-                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>Ask the assistant to check and invest</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: T.text }}>
+                  {pendingRoundups?.connected
+                    ? pendingRoundups.pending > 0
+                      ? `$${pendingRoundups.pending.toFixed(2)} ready to invest`
+                      : "No pending round-ups"
+                    : "Connect Chase to track round-ups"}
+                </div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
+                  {pendingRoundups?.transaction_count
+                    ? `${pendingRoundups.transaction_count} transactions since ${pendingRoundups.since}`
+                    : "Ask the assistant to check and invest"}
+                </div>
               </div>
               <button
                 onClick={() => {
@@ -1207,44 +1242,143 @@ export function CommandCenter({ userEmail, signOutAction }: CommandCenterProps) 
             {/* Portfolio split card */}
             <div style={{ background: T.card, border: T.cardBorder, borderRadius: 12, padding: "14px 16px" }}>
               <div style={{ fontSize: 12, color: T.muted, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}>Portfolio Split</div>
-              <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", gap: 2 }}>
+
+              {/* Target split */}
+              <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>Target</div>
+              <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", gap: 1 }}>
                 <div style={{ flex: 34, background: "#627EEA" }} />
                 <div style={{ flex: 33, background: "#F7931A" }} />
                 <div style={{ flex: 33, background: "#D85A30" }} />
               </div>
-              <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
-                {[
-                  { label: "ETH", pct: 34, color: "#627EEA" },
-                  { label: "BTC", pct: 33, color: "#F7931A" },
-                  { label: "WLD", pct: 33, color: "#D85A30" },
-                ].map((a) => (
-                  <div key={a.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: a.color }} />
-                    <div style={{ fontSize: 12, color: T.muted }}>{a.label} {a.pct}%</div>
+
+              {/* Current split (only if data exists) */}
+              {theoSummary?.actual_split && (
+                <>
+                  <div style={{ fontSize: 11, color: T.muted, marginTop: 10, marginBottom: 4 }}>Current Holdings</div>
+                  <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", gap: 1 }}>
+                    <div style={{ flex: theoSummary.actual_split.eth, background: "#627EEA" }} />
+                    <div style={{ flex: theoSummary.actual_split.btc, background: "#F7931A" }} />
+                    <div style={{ flex: theoSummary.actual_split.wld, background: "#D85A30" }} />
                   </div>
-                ))}
-              </div>
+                  <div style={{ display: "flex", gap: 12, marginTop: 6 }}>
+                    {(([
+                      { label: "ETH", val: theoSummary.actual_split.eth, color: "#627EEA" },
+                      { label: "BTC", val: theoSummary.actual_split.btc, color: "#F7931A" },
+                      { label: "WLD", val: theoSummary.actual_split.wld, color: "#D85A30" },
+                    ]) as { label: string; val: number; color: string }[]).map((a) => (
+                      <div key={a.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <div style={{ width: 7, height: 7, borderRadius: "50%", background: a.color }} />
+                        <div style={{ fontSize: 11, color: T.muted }}>{a.label} {a.val}%</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Static legend when no actual split yet */}
+              {!theoSummary?.actual_split && (
+                <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
+                  {[
+                    { label: "ETH", pct: 34, color: "#627EEA" },
+                    { label: "BTC", pct: 33, color: "#F7931A" },
+                    { label: "WLD", pct: 33, color: "#D85A30" },
+                  ].map((a) => (
+                    <div key={a.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: a.color }} />
+                      <div style={{ fontSize: 12, color: T.muted }}>{a.label} {a.pct}%</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Recent activity */}
+            {/* Milestones */}
+            {(() => {
+              const milestones = [10, 50, 100, 250, 500, 1000];
+              const invested = theoSummary?.total_invested ?? 0;
+              const next = milestones.find((m) => invested < m) ?? milestones[milestones.length - 1];
+              const prev = milestones[milestones.indexOf(next) - 1] ?? 0;
+              const pct = Math.min(((invested - prev) / (next - prev)) * 100, 100);
+              return (
+                <div style={{ background: T.card, border: T.cardBorder, borderRadius: 12, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 12, color: T.muted, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 10 }}>
+                    Milestones
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                    <div style={{ fontSize: 13, color: T.text, fontWeight: 500 }}>
+                      {invested >= 1000 ? "🎉 $1,000 reached!" : `Next: $${next}`}
+                    </div>
+                    <div style={{ fontSize: 12, color: T.muted }}>${invested.toFixed(2)} / ${next}</div>
+                  </div>
+                  <div style={{ height: 6, background: T.trackBg, borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${pct}%`, background: T.amber, borderRadius: 3, transition: "width 0.3s ease" }} />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" as const }}>
+                    {milestones.map((m) => (
+                      <div key={m} style={{
+                        fontSize: 11,
+                        padding: "2px 8px",
+                        borderRadius: 10,
+                        background: invested >= m ? T.amber : T.trackBg,
+                        color: invested >= m ? "#fff" : T.muted,
+                      }}>
+                        ${m}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Recent activity — per-asset cost basis */}
             <div style={{ background: T.card, border: T.cardBorder, borderRadius: 12, padding: "14px 16px" }}>
               <div style={{ fontSize: 12, color: T.muted, textTransform: "uppercase", letterSpacing: "0.04em" }}>Recent Activity</div>
-              {theoSummary ? (
-                <div style={{ marginTop: 8, fontSize: 13, color: T.muted }}>
-                  {theoSummary.total_invested === 0
-                    ? "No purchases yet — run your first round-up to get started."
-                    : `${Object.entries(theoSummary.by_asset)
-                        .filter(([, v]) => (v as { invested: number }).invested > 0)
-                        .map(([k, v]) => `${k.toUpperCase()}: $${(v as { invested: number }).invested.toFixed(2)} invested`)
-                        .join(" · ")}`}
+              {theoSummary && theoSummary.total_invested > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+                  {(["eth", "btc", "wld"] as const)
+                    .filter((a) => (theoSummary.by_asset[a]?.invested ?? 0) > 0)
+                    .map((a) => {
+                      const asset = theoSummary.by_asset[a];
+                      const avgBuy = theoSummary.avg_buy_price?.[a];
+                      const curPrice = asset?.current_price ?? 0;
+                      const priceDiff = avgBuy ? ((curPrice - avgBuy) / avgBuy) * 100 : null;
+                      return (
+                        <div key={a} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{
+                              width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
+                              background: a === "eth" ? "#627EEA22" : a === "btc" ? "#F7931A22" : "#D85A3022",
+                              fontSize: 12, fontWeight: 700,
+                              color: a === "eth" ? "#627EEA" : a === "btc" ? "#F7931A" : "#D85A30",
+                            }}>
+                              {a.toUpperCase()}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 13, fontWeight: 500, color: T.text }}>{a.toUpperCase()}</div>
+                              {avgBuy && <div style={{ fontSize: 11, color: T.muted }}>Avg buy ${avgBuy.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: "right" as const }}>
+                            <div style={{ fontSize: 13, fontWeight: 500, color: T.text }}>${(asset?.invested ?? 0).toFixed(2)}</div>
+                            {priceDiff !== null && (
+                              <div style={{ fontSize: 11, color: priceDiff >= 0 ? T.green : T.warn }}>
+                                {priceDiff >= 0 ? "+" : ""}{priceDiff.toFixed(1)}%
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   {(theoSummary.failed_count ?? 0) > 0 && (
-                    <div style={{ marginTop: 6, color: "#b45309" }}>
+                    <div style={{ marginTop: 4, fontSize: 12, color: "#b45309" }}>
                       {theoSummary.failed_count} failed buy{(theoSummary.failed_count ?? 0) > 1 ? "s" : ""} — ask the assistant to retry.
                     </div>
                   )}
                 </div>
               ) : (
-                <div style={{ marginTop: 8, fontSize: 13, color: T.muted }}>No purchases yet.</div>
+                <div style={{ marginTop: 8, fontSize: 13, color: T.muted }}>
+                  No purchases yet — run your first round-up to get started.
+                </div>
               )}
             </div>
 

@@ -2,11 +2,9 @@ import { randomBytes, randomUUID, sign as cryptoSign } from "node:crypto";
 
 const HOST = "api.coinbase.com";
 
-// Coinbase has no CBBTC-USD product. Buy BTC-USD; withdrawing BTC over the
-// Base network delivers cbBTC 1:1.
 export const PRODUCTS = {
   eth: "ETH-USD",
-  cbbtc: "BTC-USD",
+  btc: "BTC-USD",
   wld: "WLD-USD",
 } as const;
 
@@ -66,17 +64,17 @@ async function cbFetch<T>(
   return res.json() as Promise<T>;
 }
 
-export type Prices = { eth: number; cbbtc: number; wld: number };
+export type Prices = { eth: number; btc: number; wld: number };
 
 export async function getPrices(): Promise<Prices> {
   const data = await cbFetch<{
     pricebooks: { product_id: string; asks: { price: string }[] }[];
   }>("GET", "/api/v3/brokerage/best_bid_ask", {
-    query: `?product_ids=${PRODUCTS.eth}&product_ids=${PRODUCTS.cbbtc}&product_ids=${PRODUCTS.wld}`,
+    query: `?product_ids=${PRODUCTS.eth}&product_ids=${PRODUCTS.btc}&product_ids=${PRODUCTS.wld}`,
   });
   const ask = (id: string) =>
     Number(data.pricebooks.find((p) => p.product_id === id)?.asks[0]?.price ?? 0);
-  return { eth: ask(PRODUCTS.eth), cbbtc: ask(PRODUCTS.cbbtc), wld: ask(PRODUCTS.wld) };
+  return { eth: ask(PRODUCTS.eth), btc: ask(PRODUCTS.btc), wld: ask(PRODUCTS.wld) };
 }
 
 type OrderConfiguration = {
