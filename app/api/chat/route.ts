@@ -10,7 +10,7 @@ import {
   parseSplit,
   MIN_RUN_USD,
 } from "@/lib/theo-fund";
-import { previewMarketBuy, PRODUCTS } from "@/lib/coinbase-trade";
+import { previewMarketBuy, placeMarketBuy, getPrices, PRODUCTS } from "@/lib/coinbase-trade";
 
 export const runtime = "nodejs";
 
@@ -95,16 +95,25 @@ const tools: Tool[] = [
   {
     name: "run_theo_roundup",
     description:
-      "Calculate pending round-ups from Chase transactions for Theo's investment fund and preview the resulting Coinbase orders (40% ETH / 30% cbBTC / 30% USDC by default, configurable via the theo_portfolio_split memory). PHASE 1: preview only — never executes orders or moves money regardless of input. Always show the user the full plain-English summary: total, transaction count, date window, per-asset split, and previewed order details with fees.",
+      "Calculate pending round-ups from Chase transactions for Theo's investment fund and preview or execute the resulting Coinbase orders (40% ETH / 30% cbBTC / 30% USDC by default, configurable via the theo_portfolio_split memory). Without confirm=true, returns a preview only. Always show the user the full plain-English summary: total, transaction count, date window, per-asset split, and previewed order details with fees. After showing a preview, ask the user if they want to execute. If they confirm, call this tool again with confirm=true.",
     input_schema: {
       type: "object",
       properties: {
         confirm: {
           type: "boolean",
           description:
-            "Reserved for Phase 2. Execution is not enabled; previews are returned regardless.",
+            "Set to true when the user explicitly confirms they want to execute the buy after seeing the preview. When false or omitted, returns a preview only.",
         },
       },
+    },
+  },
+  {
+    name: "get_crypto_performance",
+    description:
+      "Show Theo's crypto fund performance: total invested via round-ups, current market value, dollar and percent gain/loss, broken out by ETH, cbBTC, and USDC.",
+    input_schema: {
+      type: "object",
+      properties: {},
     },
   },
 ];
@@ -384,7 +393,11 @@ Monthly budget is $6,000. Be encouraging and forward-looking. Acknowledge what i
 
 Memory: Use save_memory proactively when the user shares budget targets, recurring expenses, preferences, or any fact worth keeping. Stored memories are injected into every conversation so you always have context. When saving budget targets, always use Plaid's exact category names: Food and Drink, Shops, Travel, Recreation, Healthcare, Service, Transfer, Payment, Other. Save all targets together as a JSON object under the single key budget_targets — e.g. {"Food and Drink": 800, "Shops": 400}.
 
-Theo Fund: run_theo_roundup calculates round-ups from Chase spending (ceil minus amount per transaction) and previews crypto buys for Theo's long-term fund. It is currently preview-only and cannot move money. When Trey asks about round-ups or Theo's fund, run it and present a plain-English summary: total, number of transactions, date window, the ETH/cbBTC/USDC split in dollars, and previewed order details including fees. The portfolio split lives in the theo_portfolio_split memory as JSON like {"eth":40,"cbbtc":30,"usdc":30}; use save_memory to change it when asked.
+Theo Fund: Two tools manage Theo's crypto investment fund.
+
+run_theo_roundup calculates round-ups from Chase spending (ceil minus amount per transaction) and previews or executes crypto buys for Theo's long-term fund. When asked about round-ups or Theo's fund, run it and present a plain-English summary: total, number of transactions, date window, the ETH/cbBTC/USDC split in dollars, and previewed order details including fees. After presenting the preview, ask the user if they want to execute. If they confirm, call run_theo_roundup again with confirm=true to place the real orders. The portfolio split lives in the theo_portfolio_split memory as JSON like {"eth":40,"cbbtc":30,"usdc":30}; use save_memory to change it when asked.
+
+get_crypto_performance: shows Theo's total invested, current market value, and gain/loss broken out by ETH, cbBTC, and USDC. Run it when asked about how the fund is doing, its value, or returns.
 
 Style: Short and casual. Never use em dashes. No bullet points in responses. Make reasonable assumptions rather than asking clarifying questions. You are action-oriented.
 
@@ -470,6 +483,7 @@ async function executeTool(
   }
 
   if (name === "run_theo_roundup") {
+    const { confirm: confirmBuy } = (input ?? {}) as { confirm?: boolean };
     const accessToken = await getAccessToken(ctx.supabase, ctx.userId);
     if (!accessToken) {
       return { connected: false, message: "No Chase account connected yet." };
@@ -478,7 +492,7 @@ async function executeTool(
     const memories = await loadMemories(ctx.supabase, ctx.userId);
     const pending = await calculatePendingRoundups(
       accessToken,
-      memories["theo_last_roundup_date"],
+      memories["last_roundup_run"],
     );
 
     if (pending.total < MIN_RUN_USD) {
@@ -494,14 +508,63 @@ async function executeTool(
     const split = parseSplit(memories["theo_portfolio_split"]);
     const amounts = computeSplitAmounts(pending.total, split);
 
+    const prices = await getPrices();
     const [ethPreview, btcPreview] = await Promise.all([
       previewMarketBuy(PRODUCTS.eth, amounts.eth),
       previewMarketBuy(PRODUCTS.cbbtc, amounts.cbbtc),
     ]);
 
+    if (confirmBuy === true) {
+      const supabase = ctx.supabase;
+      const results = [];
+
+      if (amounts.eth > 0) {
+        const order = await placeMarketBuy(PRODUCTS.eth, amounts.eth);
+        await supabase.from("crypto_purchases").insert({
+          user_id: ctx.userId,
+          asset: "eth",
+          usd_amount: amounts.eth,
+          base_size: order.success && ethPreview.base_size ? Number(ethPreview.base_size) : null,
+          price_at_purchase: prices?.eth ?? null,
+        });
+        results.push({ asset: "eth", ...order });
+      }
+
+      if (amounts.cbbtc > 0) {
+        const order = await placeMarketBuy(PRODUCTS.cbbtc, amounts.cbbtc);
+        await supabase.from("crypto_purchases").insert({
+          user_id: ctx.userId,
+          asset: "cbbtc",
+          usd_amount: amounts.cbbtc,
+          base_size: order.success && btcPreview.base_size ? Number(btcPreview.base_size) : null,
+          price_at_purchase: prices?.cbbtc ?? null,
+        });
+        results.push({ asset: "cbbtc", ...order });
+      }
+
+      if (amounts.usdc > 0) {
+        await supabase.from("crypto_purchases").insert({
+          user_id: ctx.userId,
+          asset: "usdc",
+          usd_amount: amounts.usdc,
+          base_size: null,
+          price_at_purchase: null,
+        });
+        results.push({ asset: "usdc", note: "USD held as USDC, no order placed" });
+      }
+
+      await saveMemory(supabase, ctx.userId, "last_roundup_run", pending.window_end);
+
+      return {
+        mode: "executed",
+        total_invested: pending.total,
+        split_amounts: amounts,
+        results,
+      };
+    }
+
     return {
       mode: "preview_only",
-      note: "Phase 1: no orders were placed and no money moved.",
       pending_total: pending.total,
       capped: pending.capped,
       transaction_count: pending.transaction_count,
@@ -511,6 +574,52 @@ async function executeTool(
       usdc_note: "USDC leg is a 1:1 USD conversion on Coinbase — no order, no fee.",
       order_previews: [ethPreview, btcPreview],
       sample_transactions: pending.transactions.slice(0, 10),
+    };
+  }
+
+  if (name === "get_crypto_performance") {
+    const { data: purchases } = await ctx.supabase
+      .from("crypto_purchases")
+      .select("asset, usd_amount, base_size")
+      .eq("user_id", ctx.userId);
+
+    if (!purchases || purchases.length === 0) {
+      return { message: "No crypto purchases recorded yet." };
+    }
+
+    const prices = await getPrices();
+
+    const summary: Record<string, { invested: number; base_size: number; current_value: number }> = {
+      eth: { invested: 0, base_size: 0, current_value: 0 },
+      cbbtc: { invested: 0, base_size: 0, current_value: 0 },
+      usdc: { invested: 0, base_size: 0, current_value: 0 },
+    };
+
+    for (const p of purchases) {
+      const asset = p.asset as "eth" | "cbbtc" | "usdc";
+      summary[asset].invested += Number(p.usd_amount);
+      if (p.base_size) summary[asset].base_size += Number(p.base_size);
+    }
+
+    summary.eth.current_value = summary.eth.base_size * prices.eth;
+    summary.cbbtc.current_value = summary.cbbtc.base_size * prices.cbbtc;
+    summary.usdc.current_value = summary.usdc.invested;
+
+    const totalInvested = summary.eth.invested + summary.cbbtc.invested + summary.usdc.invested;
+    const totalValue = summary.eth.current_value + summary.cbbtc.current_value + summary.usdc.current_value;
+    const gain = totalValue - totalInvested;
+    const gainPct = totalInvested > 0 ? (gain / totalInvested) * 100 : 0;
+
+    return {
+      total_invested: Math.round(totalInvested * 100) / 100,
+      current_value: Math.round(totalValue * 100) / 100,
+      gain_usd: Math.round(gain * 100) / 100,
+      gain_pct: Math.round(gainPct * 100) / 100,
+      by_asset: {
+        eth: { ...summary.eth, current_price: prices.eth },
+        cbbtc: { ...summary.cbbtc, current_price: prices.cbbtc },
+        usdc: summary.usdc,
+      },
     };
   }
 
