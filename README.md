@@ -2,8 +2,6 @@
 
 A mobile-first household dashboard: Claude chat with real Chase spending (Plaid), Theo's crypto round-up fund (Coinbase), and an optional TRMNL e-ink display.
 
-_Screenshots coming soon._
-
 ## Features
 
 - **Budget (Plaid)** — Connect Chase, view monthly spend vs. $6,000 budget, category targets, upcoming bills, and transaction refresh.
