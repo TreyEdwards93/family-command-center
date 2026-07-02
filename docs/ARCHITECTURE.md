@@ -179,14 +179,26 @@ Do not move Plaid or Coinbase logic to Edge routes without replacing those depen
 `vercel.json`:
 
 ```json
-{ "crons": [{ "path": "/api/cron/budget-push", "schedule": "0 12 * * *" }] }
+{
+  "crons": [
+    {
+      "path": "/api/cron/budget-push",
+      "schedule": "0 12 * * *"
+    }
+  ]
+}
 ```
 
-Daily at 12:00 UTC. Hobby plan allows **one** cron job per project.
+- **Schedule:** daily at 12:00 UTC (`0 12 * * *`)
+- **Auth:** route checks `Authorization: Bearer ${CRON_SECRET}`; Vercel scheduled invocations send this header when `CRON_SECRET` is set in Production
+- **Dependencies:** `SUPABASE_SERVICE_ROLE_KEY`, Plaid row in DB, `TRMNL_WEBHOOK_URL` (returns 500 if unset)
+- Hobby plan allows **one** cron job per project
 
 ## Deployment notes
 
 - Set all env vars in Vercel (Production + Preview as needed); see [ENV.md](./ENV.md) and [.env.example](../.env.example) for variable names.
 - `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` are server-only.
-- Google OAuth redirect URLs must include `https://YOUR_DOMAIN/auth/callback` in Supabase Auth settings.
-- Plaid requires `PLAID_ENV=production` and production keys for real Chase.
+- **Google Cloud Console** authorized redirect URI: `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`
+- **Supabase** Site URL + Redirect URLs: `https://YOUR_VERCEL_DOMAIN/auth/callback` (app handler at `app/auth/callback/route.ts`)
+- Plaid requires `PLAID_ENV=production` and production keys for real Chase (defaults to sandbox if unset). No Plaid webhooks in this repo.
+- AI replication guide: [AI-REPLICATION.md](./AI-REPLICATION.md)

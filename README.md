@@ -21,10 +21,13 @@ A mobile-first household dashboard: Claude chat with real Chase spending (Plaid)
 
 Full step-by-step runbook: **[docs/SETUP.md](./docs/SETUP.md)**
 
+**AI-assisted deployment:** Paste the repo into your AI tool and start with **[docs/AI-REPLICATION.md](./docs/AI-REPLICATION.md)** (doc order, constraints, verification gates).
+
 ## Documentation
 
 | Doc | Description |
 |-----|-------------|
+| [docs/AI-REPLICATION.md](./docs/AI-REPLICATION.md) | AI handoff — replication contract and verification gates |
 | [docs/SETUP.md](./docs/SETUP.md) | Production deployment runbook |
 | [docs/ENV.md](./docs/ENV.md) | Every environment variable (Vercel configuration) |
 | [docs/DATABASE.md](./docs/DATABASE.md) | Supabase tables, RLS, memory keys |
