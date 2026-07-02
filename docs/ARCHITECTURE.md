@@ -186,6 +186,7 @@ Daily at 12:00 UTC. Hobby plan allows **one** cron job per project.
 
 ## Deployment notes
 
-- Mirror all env vars from `.env.local` to Vercel (Production + Preview as needed).
+- Set all env vars in Vercel (Production + Preview as needed); see [ENV.md](./ENV.md) and [.env.example](../.env.example) for variable names.
 - `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` are server-only.
 - Google OAuth redirect URLs must include `https://YOUR_DOMAIN/auth/callback` in Supabase Auth settings.
+- Plaid requires `PLAID_ENV=production` and production keys for real Chase.

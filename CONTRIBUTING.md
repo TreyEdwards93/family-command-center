@@ -1,18 +1,15 @@
 # Contributing
 
-Thanks for improving Family Command Center. This project is optimized for a single-household deployment but welcomes forks and PRs.
+Thanks for improving Family Command Center. This project is optimized for a single-household production deployment on Vercel but welcomes forks and PRs.
 
 ## Development
 
+The primary path is **production deployment** — see [docs/SETUP.md](./docs/SETUP.md). Environment variables belong in Vercel, not in committed files.
+
+For code changes, install dependencies and type-check locally:
+
 ```bash
 npm install
-cp .env.example .env.local   # configure locally
-npm run dev
-```
-
-Type-check:
-
-```bash
 npx tsc --noEmit
 ```
 
@@ -62,7 +59,7 @@ Tools return JSON-serializable objects passed back to Claude as `tool_result` co
 
 ## Docs
 
-Keep replication docs accurate to code — grep `process.env` and `app/api/` when adding features.
+Keep deployment docs accurate to code — grep `process.env` and `app/api/` when adding features. Production deployment is documented in [docs/SETUP.md](./docs/SETUP.md) and [docs/ENV.md](./docs/ENV.md).
 
 ## License
 
