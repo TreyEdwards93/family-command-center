@@ -24,6 +24,7 @@ Hard constraints:
 - Supabase redirect URL goes to app: https://YOUR_VERCEL_DOMAIN/auth/callback
 - No Plaid webhooks in this codebase; no Plaid OAuth redirect URI needed
 - Cron requires TRMNL_WEBHOOK_URL for { ok: true }; auth is Authorization: Bearer CRON_SECRET
+- Set NEXT_PUBLIC_MONTH_BUDGET in Vercel to your household monthly budget (USD); defaults to 6000 if unset
 
 After each SETUP phase, run that phase's Verification bullets before continuing.
 ```
@@ -51,6 +52,7 @@ Reference only: [PRD.md](./PRD.md) (user stories), [CONTRIBUTING.md](../CONTRIBU
 | **Supabase keys** | `NEXT_PUBLIC_*` for client; `SUPABASE_SERVICE_ROLE_KEY` server-only (cron bypasses RLS). |
 | **OAuth paths** | App callback: `GET /auth/callback`. No `middleware.ts` — auth is per-route. |
 | **Cron** | `vercel.json` → `GET /api/cron/budget-push` at `0 12 * * *` UTC. Vercel sends `Authorization: Bearer <CRON_SECRET>` when `CRON_SECRET` is set. |
+| **Budget** | `NEXT_PUBLIC_MONTH_BUDGET` — monthly spend ceiling for Budget tab, chat tools, and TRMNL push. Set your own amount in Vercel. |
 
 ## Exact URLs (replace placeholders)
 
