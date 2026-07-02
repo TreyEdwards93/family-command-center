@@ -1,5 +1,6 @@
 "use client";
 
+import { MONTH_BUDGET } from "@/lib/budget";
 import { getTheoAgeLabel } from "@/lib/theo";
 import { detectUpcomingBills, getBillIcon } from "@/lib/upcoming-bills";
 import type { PlaidTx, UpcomingBill } from "@/lib/upcoming-bills";
@@ -50,8 +51,6 @@ const T = {
 } as const;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-const MONTH_BUDGET = 6000;
 
 const EXCLUDED_CATS = new Set(["LOAN_DISBURSEMENTS", "INCOME", "TRANSFER_IN"]);
 

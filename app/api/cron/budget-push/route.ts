@@ -1,10 +1,9 @@
+import { MONTH_BUDGET } from "@/lib/budget";
 import { plaidClient } from "@/lib/plaid";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-
-const MONTH_BUDGET = 6000;
 
 const EXCLUDED_CATS = new Set(["LOAN_DISBURSEMENTS", "INCOME", "TRANSFER_IN"]);
 

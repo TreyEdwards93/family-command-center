@@ -85,12 +85,12 @@ Family Command Center is a private household web app that gives a family a singl
 **Test steps**
 
 1. In Chat, ask "How are we doing on the budget this month?"
-2. Claude calls `get_spending_summary` → returns total, $6,000 budget, categories, transactions.
+2. Claude calls `get_spending_summary` → returns total, monthly budget (from `NEXT_PUBLIC_MONTH_BUDGET`), categories, transactions.
 3. Ask Claude to save targets: "Set Food and Drink to $800" → `save_memory` with key `budget_targets` JSON.
 4. Budget tab reads targets from `GET /api/memories` and shows progress bars.
 5. Ask for trends: "Compare last 6 months" → `get_spending_history`.
 
-**Acceptance:** Monthly budget constant is **$6,000**. Targets stored under `budget_targets` (preferred) or legacy `budget_target_*` keys.
+**Acceptance:** Monthly budget comes from `NEXT_PUBLIC_MONTH_BUDGET` (default **6000** if unset). Targets stored under `budget_targets` (preferred) or legacy `budget_target_*` keys.
 
 ---
 
@@ -219,7 +219,7 @@ Family Command Center is a private household web app that gives a family a singl
 ### Chat agent behavior
 
 - Model: `claude-sonnet-4-6`, max 1024 tokens, streaming SSE.
-- Monthly budget in prompts: **$6,000**.
+- Monthly budget in prompts: value from `NEXT_PUBLIC_MONTH_BUDGET` (default **6000**).
 - TRMNL reminder text: max **40 characters**.
 - User email in POST body must match session email (403 otherwise).
 

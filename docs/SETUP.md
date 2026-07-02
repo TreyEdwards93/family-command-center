@@ -166,6 +166,7 @@ Use [.env.example](../.env.example) as a checklist of variable **names** — do 
 **Optional:**
 
 - `TRMNL_WEBHOOK_URL` — required for cron success response and TRMNL features
+- `NEXT_PUBLIC_MONTH_BUDGET` — your monthly household budget in USD (Budget tab, chat agent, TRMNL cron). Defaults to **6000** if unset; set this when deploying your own fork.
 
 Mark server secrets as sensitive. Never prefix secrets with `NEXT_PUBLIC_`. Redeploy after changes.
 
@@ -272,4 +273,5 @@ Replace `YOUR_VERCEL_DOMAIN` with your production origin.
 
 - **`lib/resolve-name.ts`** — map your Google emails to display names.
 - **`lib/theo.ts`** — change `THEO_BIRTHDAY` or remove Theo-specific UI.
-- **System prompt** in `app/api/chat/route.ts` — family names and budget amount ($6,000 hardcoded in several places).
+- **`NEXT_PUBLIC_MONTH_BUDGET`** — set your monthly household budget in Vercel (default 6000 if unset).
+- **System prompt** in `app/api/chat/route.ts` — family names and other household-specific copy.

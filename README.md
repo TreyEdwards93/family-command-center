@@ -4,7 +4,7 @@ A mobile-first household dashboard: Claude chat with real Chase spending (Plaid)
 
 ## Features
 
-- **Budget (Plaid)** — Connect Chase, view monthly spend vs. $6,000 budget, category targets, upcoming bills, and transaction refresh.
+- **Budget (Plaid)** — Connect Chase, view monthly spend vs. your configured budget (`NEXT_PUBLIC_MONTH_BUDGET`, default $6,000), category targets, upcoming bills, and transaction refresh.
 - **Chat agent** — Streaming Claude assistant with tools for spending analysis, household memory, TRMNL reminders, and Theo Fund operations.
 - **Theo Fund** — Round-ups from Chase spending invested into ETH, BTC, and WLD via Coinbase Advanced Trade (preview → confirm flow).
 - **TRMNL (optional)** — Push reminders from chat and a daily budget snapshot via cron webhook.

@@ -15,6 +15,7 @@ Complete catalog of every `process.env.*` reference in the codebase. In producti
 | `COINBASE_API_KEY_NAME` | **Yes** (Theo buys) | Production | [CDP Portal](https://portal.cdp.coinbase.com) → API Keys | `organizations/{org}/apiKeys/{id}` | Coinbase JWT/build fails |
 | `COINBASE_API_PRIVATE_KEY` | **Yes** (Theo buys) | Production | CDP Portal → download EC private key | PEM; use `\n` for newlines in Vercel: `"-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"`. Code replaces `\\n` → newline. **ECDSA ES256 only.** | Coinbase auth fails |
 | `TRMNL_WEBHOOK_URL` | Optional† | Production | TRMNL → Custom Plugin → webhook URL | Full HTTPS URL with plugin ID | Reminder tools fail; cron returns 500 |
+| `NEXT_PUBLIC_MONTH_BUDGET` | Optional | Production, Preview | Set your household monthly budget in USD | Integer (e.g. `6000`); defaults to **6000** if unset. Used in Budget tab, chat agent, and TRMNL cron via `lib/budget.ts`. | App uses default $6,000 budget |
 | `CRON_SECRET` | **Yes** (cron) | Production | Generate: `openssl rand -hex 32` | Any secret string; Vercel cron sends `Authorization: Bearer <value>` | Cron returns 401 |
 
 \* One of `NEXT_PUBLIC_SUPABASE_ANON_KEY` or `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` is required.
@@ -28,6 +29,7 @@ Complete catalog of every `process.env.*` reference in the codebase. In producti
 | Login / session | `NEXT_PUBLIC_SUPABASE_URL`, anon or publishable key |
 | Chat (no tools) | + `ANTHROPIC_API_KEY` |
 | Budget / Plaid (Chase) | + `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_ENV=production` |
+| Budget amount (display) | + `NEXT_PUBLIC_MONTH_BUDGET` (optional; default 6000) |
 | Theo Fund trades | + `COINBASE_API_KEY_NAME`, `COINBASE_API_PRIVATE_KEY` |
 | TRMNL reminders (chat) | + `TRMNL_WEBHOOK_URL` |
 | Daily budget cron | + `CRON_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, `TRMNL_WEBHOOK_URL`, Plaid connection in DB |

@@ -1,3 +1,4 @@
+import { MONTH_BUDGET } from "@/lib/budget";
 import { plaidClient } from "@/lib/plaid";
 import { resolveNameFromEmail } from "@/lib/resolve-name";
 import { getTheoAgeLabel } from "@/lib/theo";
@@ -286,8 +287,6 @@ async function getSpendingSummary(
   const categories = groupByCategory(transactions);
   const totalSpent =
     Math.round(categories.reduce((s, c) => s + c.total, 0) * 100) / 100;
-  const budget = 6000;
-
   return {
     connected: true,
     month: new Date(y, m, 1).toLocaleString("en-US", {
@@ -295,8 +294,8 @@ async function getSpendingSummary(
       year: "numeric",
     }),
     total_spent: totalSpent,
-    budget,
-    remaining: Math.max(0, Math.round((budget - totalSpent) * 100) / 100),
+    budget: MONTH_BUDGET,
+    remaining: Math.max(0, Math.round((MONTH_BUDGET - totalSpent) * 100) / 100),
     days_remaining: daysRemaining,
     earliest_transaction_date: earliestTransactionDate,
     categories,
@@ -485,7 +484,7 @@ Budget: You have two spending tools that pull real Chase transaction data via Pl
 - get_spending_summary: use for questions about a specific month, remaining budget, category drilldowns, or individual transaction lookups. Defaults to current month. The response includes earliest_transaction_date so you know the actual data window — use it to explain data availability rather than guessing Plaid's range.
 - get_spending_history: use for trend analysis, comparing months, or helping set realistic targets. Fetches up to 24 months of category totals. Also includes earliest_transaction_date.
 
-Monthly budget is $6,000. Be encouraging and forward-looking. Acknowledge what is on track before addressing what is not. Be direct when something needs attention but never shame or lecture.
+Monthly budget is $${MONTH_BUDGET.toLocaleString()} (from NEXT_PUBLIC_MONTH_BUDGET; default 6000 if unset). Be encouraging and forward-looking. Acknowledge what is on track before addressing what is not. Be direct when something needs attention but never shame or lecture.
 
 Memory: Use save_memory proactively when the user shares budget targets, recurring expenses, preferences, or any fact worth keeping. Stored memories are injected into every conversation so you always have context. When saving budget targets, always use Plaid's exact category names: Food and Drink, Shops, Travel, Recreation, Healthcare, Service, Transfer, Payment, Other. Save all targets together as a JSON object under the single key budget_targets — e.g. {"Food and Drink": 800, "Shops": 400}.
 
