@@ -1,13 +1,13 @@
 # Family Command Center
 
-A mobile-first household dashboard: Claude chat with real Chase spending (Plaid), Theo's crypto round-up fund (Coinbase), and an optional TRMNL e-ink display.
+Turn everyday spending into a family command center: one app where you see the month at a glance, ask Claude anything about your money, and automatically sweep spare change into ETH, BTC, and WLD for your kid — with an optional e-ink display so the whole household stays aligned without opening another app.
 
 ## Features
 
-- **Budget (Plaid)** — Connect Chase, view monthly spend vs. your configured budget (`NEXT_PUBLIC_MONTH_BUDGET`, default $6,000), category targets, upcoming bills, and transaction refresh.
-- **Chat agent** — Streaming Claude assistant with tools for spending analysis, household memory, TRMNL reminders, and Theo Fund operations.
-- **Theo Fund** — Round-ups from Chase spending invested into ETH, BTC, and WLD via Coinbase Advanced Trade (preview → confirm flow).
-- **TRMNL (optional)** — Push reminders from chat and a daily budget snapshot via cron webhook.
+- **Budget (Plaid)** — Connect Chase for real spend data; category targets, upcoming bills, and refresh against `NEXT_PUBLIC_MONTH_BUDGET` (default $6,000).
+- **Chat agent** — Tool-using assistant for spending analysis, household memory, TRMNL reminders, and Theo Fund operations.
+- **Theo Fund** — Chase round-ups through Coinbase Advanced Trade (preview → confirm flow).
+- **TRMNL (optional)** — Cron-driven daily budget snapshot and chat-pushed reminders.
 
 ## Production deployment
 
